@@ -60,6 +60,23 @@ ASR 模式都在设置页「语音服务」分区配置。
 
 - `@deepseek-ai/dsh-tools`（DSH profiles 自带，用于注册工具）
 - `ws`（Edge TTS WebSocket；profiles 自带）
+- **ffmpeg**（语音转码用，见下）
+
+### ffmpeg（必需）
+
+语音转码（录音 webm→wav、克隆样本格式转换、ASR 音频预处理）依赖 **ffmpeg**。
+插件按以下顺序自动定位可执行文件：
+
+1. 环境变量 `DSH_VOICE_FFMPEG_BIN`（显式指定完整路径）
+2. PATH 探测（`where ffmpeg` / `which ffmpeg`）
+3. 兜底已知安装位置
+
+**安装**：Windows 执行 `winget install ffmpeg`（装完一般会自动加 PATH），
+或把 ffmpeg.exe 所在目录加入 PATH。装好后无需任何配置，插件自动探测；
+若装在特殊位置，设环境变量 `DSH_VOICE_FFMPEG_BIN=C:\路径\ffmpeg.exe` 即可。
+
+> 没有 ffmpeg 时：本地 ASR（service/cmd 模式）和克隆样本的非 mp3/wav 格式转换会失败，
+> 但小米/edge 在线 TTS 不受影响。
 
 ## 来源
 
