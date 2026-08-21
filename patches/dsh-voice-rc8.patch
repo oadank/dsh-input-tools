@@ -299,10 +299,10 @@ index 80f9bc2d73..22c3fec2d6 100644
              />
            ))}
 diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
-index 54e5f6f98d..0d1aab4638 100644
+index 54e5f6f98d..0ef782e759 100644
 --- a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
 +++ b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
-@@ -16,6 +16,68 @@
+@@ -16,6 +16,101 @@
    min-width: 0;
    max-width: min(525px, 82%);
  }
@@ -362,6 +362,39 @@ index 54e5f6f98d..0d1aab4638 100644
 +  line-height: 16px;
 +}
 +
++/* [本地改造 2026-08-21] ASR 失败（无 transcript）时的弱提示。 */
++.voiceTranscriptFailed {
++  display: block;
++  max-width: 320px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  color: var(--dsw-alias-label-tertiary);
++  font-size: 12px;
++  line-height: 16px;
++  opacity: 0.85;
++}
++
++/* [本地改造 2026-08-21] 语音条内置复制按钮（对齐系统 .action：28px 圆形透明）。 */
++.voiceCopy {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  width: 28px;
++  height: 28px;
++  padding: 6px;
++  border: none;
++  border-radius: 28px;
++  background: transparent;
++  color: var(--dsw-alias-label-tertiary);
++  cursor: pointer;
++  flex-shrink: 0;
++}
++.voiceCopy:hover {
++  background: var(--dsw-alias-interactive-bg-hover);
++  color: var(--dsw-alias-label-secondary);
++}
++
 +/* [本地改造 2026-08-16] 助手语音回复独立横条：左对齐，与用户语音消息同级。 */
 +.voiceReplyRow {
 +  display: flex;
@@ -372,10 +405,10 @@ index 54e5f6f98d..0d1aab4638 100644
    /* 525px cap inside the 736 column; percentage keeps narrow windows sane. */
    max-width: 100%;
 diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
-index 8a882a70c5..2f7a8aa207 100644
+index 8a882a70c5..2345dda83e 100644
 --- a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
 +++ b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
-@@ -3,11 +3,12 @@
+@@ -3,11 +3,13 @@
  // assistant answers), pending steering (copy only), context injection,
  // compaction marker, retry disclosure, and unknown-surface JSON rows.
  
@@ -386,10 +419,11 @@ index 8a882a70c5..2f7a8aa207 100644
    ModelRetryNode, TurnErrorNode, UserMessageNode,
  } from '@deepseek-ai/dsh-client-runtime/client'
 +import type { VoiceAttachmentRef } from '@deepseek-ai/dsh-client-connection/client'
++import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
  import { JsonBlock, MessageText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
  import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
  import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
-@@ -17,14 +18,40 @@ import { MessageIconActions } from './MessageIconActions.tsx'
+@@ -17,14 +19,40 @@ import { MessageIconActions } from './MessageIconActions.tsx'
  import css from './MessageItem.module.css'
  
  type UserImage = Extract<UserMessageNode['content'][number], { type: 'image' }>
@@ -430,7 +464,7 @@ index 8a882a70c5..2f7a8aa207 100644
    const rest: unknown[] = []
    for (const block of content) {
      const b = block as { type?: string; text?: string; attachment?: unknown }
-@@ -32,9 +59,12 @@ function contentParts(content: readonly unknown[]): {
+@@ -32,9 +60,12 @@ function contentParts(content: readonly unknown[]): {
      else if (b.type === 'image' && b.attachment !== undefined) {
        images.push({ attachment: (b as UserImage).attachment })
      }
@@ -444,7 +478,7 @@ index 8a882a70c5..2f7a8aa207 100644
  }
  
  function retrySeconds(milliseconds: number): number {
-@@ -212,12 +242,107 @@ function projectUserText(text: string, sessionLabels: readonly string[]): ReactN
+@@ -212,27 +243,198 @@ function projectUserText(text: string, sessionLabels: readonly string[]): ReactN
    return <>{parts}</>
  }
  
@@ -455,13 +489,19 @@ index 8a882a70c5..2f7a8aa207 100644
 +}
 +
 +/** Right-aligned voice message card: session-authorized playback with duration. */
-+export function VoiceCard({ attachment, load, t }: {
++export function VoiceCard({ attachment, load, actions, asrFailedHint = false, t }: {
 +  attachment: VoiceAttachmentRef
 +  load?: (ref: VoiceAttachmentRef) => Promise<string>
++  /** [本地改造 2026-08-21] Voice-actions slot strip rendered at the card tail. */
++  actions?: ReactNode
++  /** [本地改造 2026-08-21] 无转写时是否显示「未能识别」提示：仅用户语音消息
++   *  开启；助手 TTS 语音回复没有 transcript 概念，不显示。 */
++  asrFailedHint?: boolean
 +  t: ChatViewSlotProps['t']
 +}) {  const [url, setUrl] = useState<string | null>(null)
 +  const [failed, setFailed] = useState(false)
 +  const [playing, setPlaying] = useState(false)
++  const [copied, setCopied] = useState(false)
 +  const audioRef = useRef<HTMLAudioElement | null>(null)
 +  useEffect(() => {
 +    let cancelled = false
@@ -524,11 +564,52 @@ index 8a882a70c5..2f7a8aa207 100644
 +          )}
 +      </button>
 +      <span className={css.voiceDuration}>{seconds === null ? '' : `${seconds}s`}</span>
-+      {attachment.transcript !== undefined && attachment.transcript !== '' && (
++      {hasTranscript ? (
 +        <span className={css.voiceTranscript} title={t('voice.transcriptLabel')}>
 +          {attachment.transcript}
 +        </span>
-+      )}
++      ) : asrFailedHint ? (
++        <span className={css.voiceTranscriptFailed} title={t('voice.asrFailed')}>
++          {t('voice.asrFailed')}
++        </span>
++      ) : null}
++      {/* [本地改造 2026-08-21] 语音条复制按钮：外部 voice-actions 优先（插件）；
++          未提供（如 AI 语音回复）且有转写时，用内置按钮兜底，保证所有语音条可复制。 */}
++      {actions !== undefined
++        ? actions
++        : (hasTranscript
++          ? (
++            <button
++              type="button"
++              className={css.voiceCopy}
++              aria-label={copied ? t('copied') : t('copy')}
++              title={copied ? t('copied') : t('copy')}
++              onClick={() => {
++                const text = attachment.transcript ?? ''
++                const done = (): void => {
++                  setCopied(true)
++                  window.setTimeout(() => setCopied(false), 1000)
++                }
++                if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
++                  void navigator.clipboard.writeText(text).then(done, done)
++                } else { done() }
++              }}
++            >
++              {copied
++                ? (
++                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++                    <path d="M3.5 8.5L6.5 11.5L12.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
++                  </svg>
++                )
++                : (
++                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
++                    <rect x="5.5" y="5.5" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3"/>
++                    <path d="M10.5 5.5V4.5A1 1 0 0 0 9.5 3.5H5A1 1 0 0 0 4 4.5v4.5a1 1 0 0 0 1 1h1" fill="none" stroke="currentColor" strokeWidth="1.3"/>
++                  </svg>
++                )}
++            </button>
++          )
++          : null)}
 +      {url !== null && (
 +        <audio
 +          ref={audioRef}
@@ -545,31 +626,69 @@ index 8a882a70c5..2f7a8aa207 100644
  /** Right-aligned bubble shared by user and steering rows. */
  function UserStyleBubble({
 -  content, renderMessageImages, actions, pending = false, referenceLabels = [], t,
-+  content, renderMessageImages, voiceLoader, actions, pending = false, referenceLabels = [], t,
++  content,
++  renderMessageImages,
++  voiceLoader,
++  actions,
++  renderVoiceActions,
++  voiceAsrFailedHint = false,
++  pending = false,
++  referenceLabels = [],
++  t,
  }: {
    content: readonly unknown[]
    renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
 +  voiceLoader: (ref: VoiceAttachmentRef) => Promise<string>
    /** Optional IconActions (or similar) below the bubble; receives the joined text. */
    actions?: (text: string) => ReactNode
++  /** [本地改造 2026-08-21] Voice-actions slot strip, resolved per voice card. */
++  renderVoiceActions?: (attachment: VoiceAttachmentRef, index: number) => ReactNode
++  /** [本地改造 2026-08-21] 语音无转写时显示「未能识别」提示（用户消息才开）。 */
++  voiceAsrFailedHint?: boolean
    /** Whether this is the Host-authoritative pre-admission steering projection. */
-@@ -226,13 +351,14 @@ function UserStyleBubble({
+   pending?: boolean
+   /** Exact session mention labels associated by the adjacent recall node. */
    referenceLabels?: readonly string[]
    t: ChatViewSlotProps['t']
  }): ReactNode {
 -  const { text, images, rest } = contentParts(content)
 +  const { text, images, voices, rest } = contentParts(content)
++  // [本地改造 2026-08-21] 语音消息复制：把每条语音的转写文本并入复制文本。
++  // 纯语音消息本身没有 text 段，转写只挂在 attachment.transcript 上，否则复制按钮
++  // 写出的 text 为空，粘贴是空白。有文字时文本在前、转写按语音顺序追加在后。
++  const voiceTranscripts = voices
++    .map(v => v.attachment.transcript)
++    .filter((s): s is string => typeof s === 'string' && s !== '')
++  const copyText = [text, ...voiceTranscripts].join('\n').trim()
    const truncated = (total: number): string => t('json.truncated', { total })
    const showBubble = text !== '' || rest.length > 0
    return (
      <div className={css.userRow} data-pending-steering={pending || undefined} data-time-hover-root>
        <div className={css.userStack}>
          {renderMessageImages({ images, align: 'end' })}
-+        {voices.map((voice, i) => <VoiceCard key={i} attachment={voice.attachment} load={voiceLoader} t={t} />)}
++        {voices.map((voice, i) => (
++          <VoiceCard
++            key={i}
++            attachment={voice.attachment}
++            load={voiceLoader}
++            actions={renderVoiceActions?.(voice.attachment, i)}
++            asrFailedHint={voiceAsrFailedHint}
++            t={t}
++          />
++        ))}
          {showBubble && <div className={css.bubble}>
            {projectUserText(text, referenceLabels)}
            {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
-@@ -254,15 +380,18 @@ function UserStyleBubble({
+@@ -243,7 +445,7 @@ function UserStyleBubble({
+           </div>
+         )}
+       </div>
+-      {actions?.(text)}
++      {actions?.(copyText)}
+     </div>
+   )
+ }
+@@ -254,15 +456,18 @@ function UserStyleBubble({
   * @param props - Pending message content and conversation translator.
   * @returns the pending steering bubble.
   */
@@ -589,23 +708,54 @@ index 8a882a70c5..2f7a8aa207 100644
        pending
        t={t}
        actions={text => (
-@@ -279,13 +408,14 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
+@@ -278,14 +483,36 @@ export function PendingSteeringBubble({ content, renderMessageImages, t }: {
+ }
  
  /** User and admitted-steering keyed Chat renderer. */
++type UserMessageNodeViewProps = ChatNodeViewProps<'user' | 'steering'>
++  & PropsRenderSlots<'conversation.chat.user-actions' | 'conversation.chat.voice-actions'>
++
  export const UserMessageNodeView = memo(function UserMessageNodeView({
 -  node, renderMessageImages, t,
-+  node, renderMessageImages, loadVoice, t,
- }: ChatNodeViewProps<'user' | 'steering'>) {
+-}: ChatNodeViewProps<'user' | 'steering'>) {
++  node, renderMessageImages, loadVoice, renderSlot, t,
++}: UserMessageNodeViewProps) {
    const data = node.data
++  // [本地改造 2026-08-21] 用户消息操作行：语音转写只挂在 attachment.transcript 上、
++  // 不在 text 段，把转写文本作为 owner currency 交给 user-actions 槽
++  // （供「复制转写」类按钮直接使用，无需再按 id 回溯消息）。
++  const voiceTranscripts = data.content
++    .filter((b): b is UserVoice => b.type === 'voice')
++    .map(b => b.attachment.transcript)
++    .filter((s): s is string => typeof s === 'string' && s !== '')
++  const userActions = renderSlot('conversation.chat.user-actions', { seq: data.seq, voiceTranscripts })
++  // [本地改造 2026-08-21] 语音条尾部动作：逐条语音卡解析，给「复制转写」按钮
++  // 放在语音条最后面（卡片内、转写文本之后），而不是消息操作行里。
++  const renderVoiceActions = (attachment: VoiceAttachmentRef, index: number): ReactNode =>
++    renderSlot('conversation.chat.voice-actions', {
++      seq: data.seq,
++      index,
++      transcript: attachment.transcript ?? '',
++    })
    return (
      <UserStyleBubble
        content={data.content}
        renderMessageImages={renderMessageImages}
 +      voiceLoader={loadVoice}
++      renderVoiceActions={renderVoiceActions}
++      voiceAsrFailedHint
        {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
        t={t}
        actions={text => (
-@@ -304,6 +434,10 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
+@@ -294,6 +521,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
+           time={data.time}
+           clock="start"
+           className={css.actions}
++          extraActions={userActions}
+           t={t}
+         />
+       )}
+@@ -304,6 +532,10 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
  /** Injected-context keyed Chat renderer. */
  export const ContextMessageNodeView = memo(function ContextMessageNodeView({ node, t }: ChatNodeViewProps<'context'>) {
    const data = node.data
@@ -830,10 +980,10 @@ index 0000000000..8fd17edbbe
 +  )
 +})
 diff --git a/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts b/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
-index ed311e4b74..8460abbd97 100644
+index ed311e4b74..ab63cde601 100644
 --- a/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
 +++ b/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
-@@ -7,6 +7,7 @@ import {
+@@ -7,16 +7,31 @@ import {
    TurnMaxTokensNodeView, UnknownNodeView, UserMessageNodeView,
  } from './MessageItem.tsx'
  import { TurnTailNodeView } from './TurnTailNodeView.tsx'
@@ -841,7 +991,35 @@ index ed311e4b74..8460abbd97 100644
  
  /**
   * Register this package's business renderers behind the keyed Chat Node seat.
-@@ -46,6 +47,8 @@ export function registerChatNodeRenderers(ctx: Context): void {
+  * @param ctx - owning UI Conversation context.
+  */
+ export function registerChatNodeRenderers(ctx: Context): void {
+-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+-    { name: 'conversation.chat.node', key: 'user', locale: NS }, UserMessageNodeView))
+-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+-    { name: 'conversation.chat.node', key: 'steering', locale: NS }, UserMessageNodeView))
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
++    name: 'conversation.chat.node',
++    key: 'user',
++    locale: NS,
++    children: {
++      'conversation.chat.user-actions': { kind: 'list', scope: 'session' },
++      'conversation.chat.voice-actions': { kind: 'list', scope: 'session' },
++    },
++  }, UserMessageNodeView))
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
++    name: 'conversation.chat.node',
++    key: 'steering',
++    locale: NS,
++    children: {
++      'conversation.chat.user-actions': { kind: 'list', scope: 'session' },
++      'conversation.chat.voice-actions': { kind: 'list', scope: 'session' },
++    },
++  }, UserMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+     { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+@@ -46,6 +61,8 @@ export function registerChatNodeRenderers(ctx: Context): void {
        'conversation.chat.assistant-actions': { kind: 'list', scope: 'session' },
      },
    }, TurnTailNodeView))
@@ -851,7 +1029,7 @@ index ed311e4b74..8460abbd97 100644
      { name: 'conversation.chat.node', key: 'unknown', locale: NS }, UnknownNodeView))
  }
 diff --git a/packages/client/ui-conversation/src/client/contract/slots.ts b/packages/client/ui-conversation/src/client/contract/slots.ts
-index 4ea0c79402..645b4de985 100644
+index 4ea0c79402..a7a8e7b60f 100644
 --- a/packages/client/ui-conversation/src/client/contract/slots.ts
 +++ b/packages/client/ui-conversation/src/client/contract/slots.ts
 @@ -11,7 +11,7 @@ import type {
@@ -863,7 +1041,65 @@ index 4ea0c79402..645b4de985 100644
  import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
  import type { ComposerBlock } from '../input/blocks.ts'
  import type {
-@@ -403,6 +403,10 @@ export interface ChatNodeOwnerProps {
+@@ -140,6 +140,32 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+       scope: 'session'
+       owner: AssistantActionOwnerProps
+     }
++    /**
++     * Action strip attached to one finalized user message, rendered inside
++     * that message's IconActions row. Mirror of the assistant-actions seat:
++     * user messages carry no messageId, so the owner addresses the message by
++     * its stable `seq` and hands the voice transcripts (the rendered
++     * transcript text lives only on `attachment.transcript`, not in any text
++     * block — contributors that copy a voice message need this directly).
++     * Entries render by ascending `order`.
++     */
++    'conversation.chat.user-actions': {
++      kind: 'list'
++      scope: 'session'
++      owner: UserActionOwnerProps
++    }
++    /**
++     * Actions rendered at the tail of one voice card (inside the card, after
++     * the transcript label), addressed by message `seq` + card `index` and
++     * handed the single card's transcript. This is where a "copy transcript"
++     * affordance belongs — inside the voice bar itself, not in the message
++     * action row. Entries render by ascending `order`.
++     */
++    'conversation.chat.voice-actions': {
++      kind: 'list'
++      scope: 'session'
++      owner: VoiceActionOwnerProps
++    }
+     /**
+      * The body of the details panel for the tool call the user selected —
+      * one occupant, so taking it means rendering every tool's output, not just
+@@ -380,6 +406,24 @@ export interface AssistantActionOwnerProps {
+   messageId: MessageId
+ }
+ 
++/** Owner currency of one finalized user message's action strip. */
++export interface UserActionOwnerProps {
++  /** User messages carry no messageId; `seq` is the stable message identity. */
++  seq: number
++  /** Non-empty voice transcripts on this message, in attachment order. */
++  voiceTranscripts: readonly string[]
++}
++
++/** Owner currency of one voice card's tail actions. */
++export interface VoiceActionOwnerProps {
++  /** Stable message identity of the containing user message. */
++  seq: number
++  /** Zero-based index of the voice card within the message. */
++  index: number
++  /** This card's transcript (may be empty when ASR produced none). */
++  transcript: string
++}
++
+ /** Hook constrained to business data published on the current Chat Node's Turn. */
+ export type UseChatNodeTurnData = <Key extends Extract<keyof ConversationTurnDataMap, string>>(
+   key: Key,
+@@ -403,6 +447,10 @@ export interface ChatNodeOwnerProps {
    forkAt: (seq: number) => void
    /** Render a historical image group through the attachment slot. */
    renderMessageImages: RenderMessageImages
@@ -874,7 +1110,7 @@ index 4ea0c79402..645b4de985 100644
    fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
  }
  
-@@ -474,6 +478,8 @@ export interface ConversationSessionInjected {
+@@ -474,6 +522,8 @@ export interface ConversationSessionInjected {
    }
    /** Release historical image URLs when this rendered session scope unmounts. */
    releaseSessionImages: (sessionId: SessionId) => void
@@ -883,7 +1119,7 @@ index 4ea0c79402..645b4de985 100644
    /** Bind the input machine's draft persistence mirror to the session store. */
    bindDraftMirror: (write: (text: string) => void) => () => void
  }
-@@ -556,6 +562,35 @@ export interface ComposerBarInjected {
+@@ -556,6 +606,35 @@ export interface ComposerBarInjected {
     * Resolves admission: false = rejected/unmatched/transport failure.
     */
    command: ((line: string) => Promise<boolean>) | undefined
@@ -919,7 +1155,7 @@ index 4ea0c79402..645b4de985 100644
    /**
     * Registrant hooks compartment: the renderer binds these to
     * useNotices/useLexicon (static absent sources without a session — hook
-@@ -736,6 +771,17 @@ export interface ChatViewInjected {
+@@ -736,6 +815,17 @@ export interface ChatViewInjected {
    loadOlder: () => void
    /** Resolve a session-authorized historical image for inline display. */
    loadImage: (attachment: ImageAttachmentRef) => Promise<string>
@@ -959,10 +1195,10 @@ index 5086253e81..79156231cc 100644
  }
 diff --git a/packages/client/ui-conversation/src/client/conversation-nodes/voice-reply.ts b/packages/client/ui-conversation/src/client/conversation-nodes/voice-reply.ts
 new file mode 100644
-index 0000000000..0254b5f56f
+index 0000000000..e7312b797f
 --- /dev/null
 +++ b/packages/client/ui-conversation/src/client/conversation-nodes/voice-reply.ts
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,79 @@
 +import type { Context } from '@deepseek-ai/cordis'
 +import type {
 +  ConversationMatch, ConversationNodeDefinition,
@@ -994,7 +1230,7 @@ index 0000000000..0254b5f56f
 +
 +function stateFrom(match: ConversationMatch): VoiceReplyState | undefined {
 +  if (match.event.type !== 'voice/reply') return undefined
-+  const { turn, voiceId, mediaType, bytes, durationMs } = match.event.data
++  const { turn, voiceId, mediaType, bytes, durationMs, transcript } = match.event.data
 +  return {
 +    turn,
 +    seq: match.event.seq,
@@ -1004,6 +1240,8 @@ index 0000000000..0254b5f56f
 +      mediaType: mediaType as VoiceAttachmentRef['mediaType'],
 +      bytes,
 +      ...(durationMs === undefined ? {} : { durationMs }),
++      // [本地改造 2026-08-21] AI 语音回复的转写文本（合成的正文），供语音条显示与复制
++      ...(typeof transcript === 'string' && transcript !== '' ? { transcript } : {}),
 +    },
 +  }
 +}
@@ -1053,10 +1291,10 @@ index 814734411b..5d8e0082b3 100644
  export { apply, inject } from './apply.ts'
  export { ConversationController } from './service.ts'
 diff --git a/packages/client/ui-conversation/src/client/locales.ts b/packages/client/ui-conversation/src/client/locales.ts
-index f4e7a7c59a..9ce1c76338 100644
+index f4e7a7c59a..8e7f378d52 100644
 --- a/packages/client/ui-conversation/src/client/locales.ts
 +++ b/packages/client/ui-conversation/src/client/locales.ts
-@@ -50,6 +50,25 @@ export const zh = {
+@@ -50,6 +50,26 @@ export const zh = {
    'image.modelUnsupported': '当前模型不支持图片，请切换支持图片的模型',
    'image.subagentUnsupported': '子智能体会话暂不支持图片',
    'image.sendFailed': '图片发送失败（{reason}），请重新添加图片后再试',
@@ -1076,13 +1314,14 @@ index f4e7a7c59a..9ce1c76338 100644
 +  'voice.play': '播放语音',
 +  'voice.pause': '暂停播放',
 +  'voice.transcriptLabel': '语音识别文本',
++  'voice.asrFailed': '未能识别（ASR 未配置或识别失败）',
 +  'voice.loadFailed': '语音加载失败',
 +  'voice.synthesizing': '正在合成语音回复…',
 +  'voice.reply': '语音回复',
    'context.aria': '上下文已用 {percent}',
    'context.used': '上下文已用',
    'context.system': '系统提示词',
-@@ -227,6 +246,25 @@ export const en = {
+@@ -227,6 +247,26 @@ export const en = {
    'image.modelUnsupported': 'The current model does not support images; switch to a model that does',
    'image.subagentUnsupported': 'Subagent sessions do not support images yet',
    'image.sendFailed': 'Sending images failed ({reason}); re-add them and try again',
@@ -1102,6 +1341,7 @@ index f4e7a7c59a..9ce1c76338 100644
 +  'voice.play': 'Play voice',
 +  'voice.pause': 'Pause playback',
 +  'voice.transcriptLabel': 'Voice transcript',
++  'voice.asrFailed': 'Recognition failed (ASR not configured or errored)',
 +  'voice.loadFailed': 'Failed to load voice',
 +  'voice.synthesizing': 'Synthesizing voice reply…',
 +  'voice.reply': 'Voice reply',
@@ -1357,17 +1597,16 @@ index e5b85df3e9..1a5b45deac 100644
     (figma ToggleButton: 13/20 medium secondary, 12px chevron). */
  .select {
 diff --git a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
-index 14feaca291..2af38c0fd6 100644
+index 14feaca291..29c44da070 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
-@@ -12,21 +12,19 @@ import clsx from 'clsx'
+@@ -12,21 +12,18 @@ import clsx from 'clsx'
  import {
    IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
  } from '@deepseek-ai/dsh-client-ui-primitives'
 -// Type-only: the `plan` projection key merge (the TodoDock posture — the
 -// composer reads a host-computed value; the domain owns the key).
 +import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-+import type { PromptContentPart } from '@deepseek-ai/dsh-client-connection/client'
 +import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
 +// Type-only: pulls the `plan` SessionProjectionMap merge so useProjection('plan') type-checks.
  import type {} from '@deepseek-ai/dsh-plan-mode/client'
@@ -1383,170 +1622,12 @@ index 14feaca291..2af38c0fd6 100644
  import { attachmentErrorText, imageSizeText } from '../image-labels.ts'
  import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
  import { ContextMeter } from './ContextMeter.tsx'
-+import { stopVoicePlayback } from '../chat/MessageItem'
-+/* [本地改造 2026-08-18] 余额显示已迁移至插件 @anoslide/dsh-client-balance（conversation.input.right）。 */
++/* [本地改造 2026-08-20] 余额/图片/语音按钮全部迁移至插件 @oadank/dsh-client-composer；
++   源码 InputBar 不再持有图片/语音 UI，余额挂 conversation.input.right（插件）。 */
  import { PermissionSelect } from './PermissionSelect.tsx'
  import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'
  import css from './InputBar.module.css'
-@@ -38,7 +36,7 @@ export type InputBarProps = ComposerBarProps
- 
- export function InputBar({
-   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
--  resolveSubmitMode, toggleCommandMenu, stop, command, t,
-+  resolveSubmitMode, toggleCommandMenu, stop, command, sendVoice, transcribeVoice, t,
-   renderSlot, useNotices, useLexicon, useMenuLauncher,
-   useProjection, sessionId, variant, disabled: inert = false, blocked,
-   workspacePickerOpen = false, onRequestWorkspace,
-@@ -104,6 +102,148 @@ export function InputBar({
-   // IME guard: composition Enter picks a candidate, it must not send. The ref outlives renders;
-   // clearing is deferred one tick because Safari delivers the closing keydown AFTER compositionend.
-   const composingRef = useRef(false)
-+  // [本地改造 2026-08-16] 附件"📎"按钮：隐藏 file input，选图走 intakeImages（同拖拽/粘贴路径）
-+  const attachInputRef = useRef<HTMLInputElement | null>(null)
-+  // [本地改造 2026-08-16] 语音按钮（点击式）：点一下开始录音，再点停止并发送，
-+  // 录音中显示秒数与取消。MediaRecorder 录音 → base64 voice part。
-+  // 注：按住说话/上滑手势（微信式）在移动端与 Edge 不可用——getUserMedia 异步
-+  // 启动有数百 ms 延迟，短按松手时录音尚未开始；触摸/移出还会触发 pointerleave
-+  // 提前取消。手势代码已移除，交互固定为点击式（代码保留在 git 历史）。
-+  const [recording, setRecording] = useState(false)
-+  const [recordingSeconds, setRecordingSeconds] = useState(0)
-+  const recorderRef = useRef<MediaRecorder | null>(null)
-+  const streamRef = useRef<MediaStream | null>(null)
-+  const chunksRef = useRef<Blob[]>([])
-+  const timerRef = useRef<number | null>(null)
-+  const gestureRef = useRef<'send' | 'cancel' | 'text'>('send')
-+  const recordingSecondsRef = useRef(0)
-+  const MAX_RECORDING_SECONDS = 60
-+  const voiceSupported = typeof navigator !== 'undefined'
-+    && navigator.mediaDevices?.getUserMedia !== undefined
-+    && typeof MediaRecorder !== 'undefined'
-+  const finishRecording = useCallback((): void => {
-+    if (timerRef.current !== null) {
-+      window.clearInterval(timerRef.current)
-+      timerRef.current = null
-+    }
-+    for (const track of streamRef.current?.getTracks() ?? []) track.stop()
-+    streamRef.current = null
-+    recorderRef.current = null
-+    setRecording(false)
-+    setRecordingSeconds(0)
-+  }, [])
-+  /** Convert one recorded blob into the wire voice part (base64 + media type). */
-+  const voicePartOf = useCallback((blob: Blob): Extract<PromptContentPart, { type: 'voice' }> | null => {
-+    const mediaType = (blob.type.split(';')[0] ?? '') as 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav'
-+    if (mediaType !== 'audio/webm' && mediaType !== 'audio/ogg' && mediaType !== 'audio/mp4' && mediaType !== 'audio/wav') {
-+      showToast(t('voice.unsupportedFormat'))
-+      return null
-+    }
-+    return {
-+      type: 'voice',
-+      mediaType,
-+      data: '', // filled by the async base64 conversion below
-+    }
-+  }, [showToast, t])
-+  const sendRecordedVoice = useCallback((blob: Blob): void => {
-+    if (sendVoice === undefined) return
-+    const part = voicePartOf(blob)
-+    if (part === null) return
-+    // [本地改造 2026-08-16] 语音发送走 composer 策略解析的 mode（设置里的
-+    // 排队/插队偏好），与文本/转文字发送一致——不再硬编码排队。
-+    const mode = resolveSubmitMode(running, 'enter', subagent === null)
-+    void blob.arrayBuffer().then((buffer) => {
-+      const bytes = new Uint8Array(buffer)
-+      let binary = ''
-+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
-+      }
-+      const durationMs = recordingSecondsRef.current * 1000
-+      return sendVoice({
-+        ...part,
-+        data: btoa(binary),
-+        ...(durationMs > 0 ? { durationMs } : {}),
-+      }, mode)
-+    }).then((accepted) => {
-+      if (accepted === false) showToast(t('voice.sendFailed'))
-+    }).catch(() => {
-+      showToast(t('voice.sendFailed'))
-+    })
-+  }, [sendVoice, voicePartOf, showToast, resolveSubmitMode, running, subagent])
-+  /** 上滑右侧转文本：ASR 结果填入 draft 并立即以文本消息发送（音频不落库）。 */
-+  const sendRecordedAsText = useCallback((blob: Blob): void => {
-+    if (transcribeVoice === undefined || keyboard === undefined) return
-+    const part = voicePartOf(blob)
-+    if (part === null) return
-+    showToast(t('voice.recognizing'))
-+    void blob.arrayBuffer().then((buffer) => {
-+      const bytes = new Uint8Array(buffer)
-+      let binary = ''
-+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
-+      }
-+      const durationMs = recordingSecondsRef.current * 1000
-+      return transcribeVoice({
-+        ...part,
-+        data: btoa(binary),
-+        ...(durationMs > 0 ? { durationMs } : {}),
-+      })
-+    }).then((text) => {
-+      if (text === null || text === '') {
-+        showToast(t('voice.recognitionFailed'))
-+        return
-+      }
-+      keyboard.setDraft(text)
-+      keyboard.submit(resolveSubmitMode(running, 'enter', subagent === null))
-+    }).catch(() => {
-+      showToast(t('voice.recognitionFailed'))
-+    })
-+  }, [transcribeVoice, voicePartOf, keyboard, showToast, t, resolveSubmitMode, running, subagent])
-+  const stopRecording = useCallback((gesture: 'send' | 'cancel' | 'text'): void => {
-+    const recorder = recorderRef.current
-+    if (recorder === null || recorder.state === 'inactive') return
-+    gestureRef.current = gesture
-+    recorder.stop()
-+    finishRecording()
-+  }, [finishRecording])
-+  const startRecording = useCallback(async (): Promise<void> => {
-+    if (sendVoice === undefined) return
-+    // [本地改造 2026-08-18] 录音时先停掉正在播放的语音（避免外放被录进新语音）
-+    stopVoicePlayback()
-+    try {
-+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-+      const recorder = new MediaRecorder(stream)
-+      chunksRef.current = []
-+      gestureRef.current = 'send'
-+      recorder.ondataavailable = (event) => {
-+        if (event.data.size > 0) chunksRef.current.push(event.data)
-+      }
-+      recorder.onstop = () => {
-+        const gesture = gestureRef.current
-+        if (gesture === 'cancel') return
-+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
-+        if (blob.size === 0) {
-+          showToast(t('voice.empty'))
-+          return
-+        }
-+        if (gesture === 'text') sendRecordedAsText(blob)
-+        else sendRecordedVoice(blob)
-+      }
-+      recorder.start()
-+      recorderRef.current = recorder
-+      streamRef.current = stream
-+      recordingSecondsRef.current = 0
-+      setRecordingSeconds(0)
-+      setRecording(true)
-+      timerRef.current = window.setInterval(() => {
-+        recordingSecondsRef.current += 1
-+        setRecordingSeconds(recordingSecondsRef.current)
-+        if (recordingSecondsRef.current >= MAX_RECORDING_SECONDS) stopRecording('send')
-+      }, 1000)
-+    } catch {
-+      showToast(t('voice.micUnavailable'))
-+    }
-+  }, [sendVoice, sendRecordedVoice, sendRecordedAsText, showToast, stopRecording])
-   const onCompositionStart = (): void => {
-     composingRef.current = true
-   }
-@@ -201,25 +341,27 @@ export function InputBar({
+@@ -201,25 +198,27 @@ export function InputBar({
    const revealSelectionFocus = (el: HTMLTextAreaElement): void => {
      // selectionStart/End are number|null in lib.dom; the type-aware lint program narrows them.
      const caret = el.selectionDirection === 'backward' ? el.selectionStart : el.selectionEnd
@@ -1585,7 +1666,7 @@ index 14feaca291..2af38c0fd6 100644
  
    // A persisted draft arrives AFTER the unlock effect: ConversationSession
    // adopts it in its own mount effect, and a parent's mount effect runs after
-@@ -270,12 +412,10 @@ export function InputBar({
+@@ -270,12 +269,10 @@ export function InputBar({
    }, [])
  
    // selectionStart/End are number|null in lib.dom; the type-aware lint program narrows them.
@@ -1598,7 +1679,7 @@ index 14feaca291..2af38c0fd6 100644
  
    const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
      if (workspaceTrigger) {
-@@ -292,7 +432,6 @@ export function InputBar({
+@@ -292,7 +289,6 @@ export function InputBar({
      // IME guard so a composition-closing Shift+Enter still breaks the line.
      if (e.key === 'Enter' && e.shiftKey) return
      // keyCode 229 is the legacy IME-composition signal engines emit without isComposing.
@@ -1606,7 +1687,7 @@ index 14feaca291..2af38c0fd6 100644
      const composing = composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229
      if (!composing && !machineBusy && !locked
        && (e.key === 'Backspace' || e.key === 'Delete')) {
-@@ -374,7 +513,6 @@ export function InputBar({
+@@ -374,7 +370,6 @@ export function InputBar({
      safariNativeShrinkRef.current = safari && next.length < draft.length
      keyboard.setDraft(next)
      // selectionStart is number|null in lib.dom; the type-aware lint program narrows it.
@@ -1614,21 +1695,15 @@ index 14feaca291..2af38c0fd6 100644
      keyboard.track(next, e.target.selectionStart ?? next.length)
    }
  
-@@ -463,6 +601,13 @@ export function InputBar({
+@@ -463,7 +458,6 @@ export function InputBar({
      })()
      if (rejected !== null) showToast(rejected)
    }, [addImages, attachments, imageLimits, showToast, t])
-+  // [本地改造 2026-08-16] 附件"📎"按钮：打开文件选择 → intakeImages（图片消息链路，host 无视觉时自动转 vision-qa）
-+  const pickImages = useCallback((): void => { attachInputRef.current?.click() }, [])
-+  const onAttachPicked = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
-+    const files = Array.from(event.target.files ?? [])
-+    if (files.length > 0) intakeImages(files)
-+    event.target.value = ''
-+  }, [intakeImages])
- 
+-
    const canAcceptDrop = !locked && !machineBusy && addImages !== undefined
  
-@@ -482,6 +627,13 @@ export function InputBar({
+   const onSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>): void => {
+@@ -482,6 +476,13 @@ export function InputBar({
      inputRef.current?.focus({ preventScroll: true })
    }
  
@@ -1642,77 +1717,29 @@ index 14feaca291..2af38c0fd6 100644
    const onToggleCommandMenu = (): void => {
      const el = inputRef.current
      if (el !== null) toggleCommandMenu?.(selectionOf(el))
-@@ -694,20 +846,76 @@ export function InputBar({
+@@ -694,25 +695,27 @@ export function InputBar({
          </div>
          <div className={css.row}>
            <div className={css.tools}>
 -            <Tooltip label={t('input.commands')} side="top" delayMs={500}>
-+            {/* [本地改造 2026-08-16] 附件上传按钮（恢复 2026-08-18）：选图 → 图片进入输入框内附件条（与 Ctrl+V 粘贴同链路 intakeImages），随文字一起发送；手机端无粘贴键，按钮必须有。 */}
-+            <button
-+              type="button"
-+              className={css.add}
-+              aria-label="添加图片"
-+              disabled={locked || addImages === undefined}
-+              onMouseDown={releaseFocus}
-+              onClick={pickImages}
-+            >
-+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
-+                <rect x="2.5" y="3.5" width="11" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4"/>
-+                <circle cx="6" cy="7.5" r="1.5" fill="currentColor"/>
-+                <path d="M3.5 11.5 L6.5 8.5 L9 10.5 L11.5 8 L13.5 10.5" stroke="currentColor" strokeWidth="1.2" fill="none"/>
-+              </svg>
-+            </button>
-+            <input ref={attachInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={onAttachPicked} />
-+            {/* [本地改造 2026-08-16] 语音按钮（点击式）：点一下开始录音，再点停止并发送；录音中显示秒数与取消。 */}
-+            {voiceSupported && (
-+              <button
-+                type="button"
-+                className={clsx(css.add, recording && css.voiceRecording)}
-+                aria-label={recording ? t('voice.stopAndSend') : t('voice.start')}
-+                data-recording={recording || undefined}
-+                disabled={locked || machineBusy || sendVoice === undefined}
-+                onMouseDown={releaseFocus}
-+                onClick={() => {
-+                  if (recording) stopRecording('send')
-+                  else void startRecording()
-+                }}
-+              >
-+                {recording
-+                  ? (
-+                    <span className={css.voiceTimer}>
-+                      <span className={css.voiceDot} aria-hidden />
-+                      {recordingSeconds}s
-+                    </span>
-+                  )
-+                  : (
-+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
-+                      <path d="M8 1.5C6.895 1.5 6 2.395 6 3.5V8C6 9.105 6.895 10 8 10C9.105 10 10 9.105 10 8V3.5C10 2.395 9.105 1.5 8 1.5Z" fill="currentColor"/>
-+                      <path d="M3.5 7.5V8C3.5 10.485 5.515 12.5 8 12.5C10.485 12.5 12.5 10.485 12.5 8V7.5H14V8C14 11.087 11.683 13.615 8.75 13.936V15.5H7.25V13.936C4.317 13.615 2 11.087 2 8V7.5H3.5Z" fill="currentColor"/>
-+                    </svg>
-+                  )}
-+              </button>
-+            )}
-+            {recording && (
-               <button
-                 type="button"
-                 className={css.add}
+-              <button
+-                type="button"
+-                className={css.add}
 -                aria-label={t('input.commands')}
 -                aria-haspopup="listbox"
 -                aria-expanded={commandMenuOpen}
 -                disabled={locked || toggleCommandMenu === undefined}
 -                onMouseDown={keepFocus}
 -                onClick={onToggleCommandMenu}
-+                aria-label={t('voice.cancel')}
-+                onMouseDown={releaseFocus}
-+                onClick={() => { stopRecording('cancel') }}
-               >
+-              >
 -                <IconPlusOutline16 size={14} />
-+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
-+                  <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
-+                </svg>
-               </button>
+-              </button>
 -            </Tooltip>
-+            )}
++            {/* [本地改造 2026-08-20] 余额/图片/语音按钮全部由插件 @oadank/dsh-client-composer 通过
++                conversation.input.left 提供；插件图片按钮调官方 onAddImages（=intakeImages），
++                图片走官方 draft 链路随文本发送。用户要求按钮顺序：[🖼][🎙][+]——
++                插件按钮在最左（命令 + 按钮之前），+ 命令按钮在右。 */}
++            {leftItems}
 +            <button
 +              type="button"
 +              className={css.add}
@@ -1728,7 +1755,12 @@ index 14feaca291..2af38c0fd6 100644
              <div className={css.modes}>
                {accessSelect}
                {renderSlot('conversation.input.plan', { locked })}
-@@ -725,7 +933,7 @@ export function InputBar({
+             </div>
+-            {leftItems}
+           </div>
+           <div className={css.trailing}>
+             {rightItems}
+@@ -725,7 +728,7 @@ export function InputBar({
                    className={css.primary}
                    aria-label={t('input.stop')}
                    disabled={stop === undefined}
@@ -1749,10 +1781,10 @@ index 098743dd8a..ad82a01de7 100644
    'web/deepseek-search-llm-request',
  ])
 diff --git a/packages/core/session/src/types.ts b/packages/core/session/src/types.ts
-index 31ce28a01b..57e1312ed2 100644
+index 31ce28a01b..7f33eb2fb9 100644
 --- a/packages/core/session/src/types.ts
 +++ b/packages/core/session/src/types.ts
-@@ -334,6 +334,23 @@ export interface SessionEventMap {
+@@ -334,6 +334,25 @@ export interface SessionEventMap {
     * so tolerating concurrent writers needs a signal beyond the log.
     */
    'session/end-seed': Record<string, never>
@@ -1772,6 +1804,8 @@ index 31ce28a01b..57e1312ed2 100644
 +    bytes: number
 +    /** Recorder-style duration in milliseconds. */
 +    durationMs?: number
++    /** [本地改造 2026-08-21] 合成的正文（转写文本），供语音条显示与复制。 */
++    transcript?: string
 +  }
  }
  
@@ -1822,7 +1856,7 @@ index fba04c4759..6de5aaaa52 100644
    }
  }
 diff --git a/packages/host/apiproxy/src/api-proxy.ts b/packages/host/apiproxy/src/api-proxy.ts
-index ccb2d6d20c..a2579fab12 100644
+index ccb2d6d20c..aa6d647c1d 100644
 --- a/packages/host/apiproxy/src/api-proxy.ts
 +++ b/packages/host/apiproxy/src/api-proxy.ts
 @@ -4,16 +4,16 @@
@@ -1864,7 +1898,7 @@ index ccb2d6d20c..a2579fab12 100644
  import type { SessionRawArtifact } from '@deepseek-ai/dsh-session-persistence'
  import {
    SESSION_SEARCH_RESULT_LIMIT,
-@@ -124,19 +126,140 @@ export const DEFAULT_COLD_BLANK_PROBE_MAX_BYTES = 1024
+@@ -124,19 +126,150 @@ export const DEFAULT_COLD_BLANK_PROBE_MAX_BYTES = 1024
  /** Conversation message event types (the pagination counting unit). */
  const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
  
@@ -1984,11 +2018,21 @@ index ccb2d6d20c..a2579fab12 100644
 +        attachment = await saveVoiceFile(
 +          root, item.data, item.part.mediaType, item.part.durationMs,
 +        )
-+        const text = await transcribeVoice(voiceObjectPath(root, attachment.voiceId))
-+        if (text !== '') attachment = { ...attachment, transcript: text }
 +      } catch {
 +        throw new AttachmentError('Unable to persist voice object.', 'ATTACHMENT_WRITE_FAILED')
 +      }
++      // [本地改造 2026-08-21] ASR 识别失败 = 阻断发送：语音块不进模型。
++      // 之前识别失败会把无 transcript 的语音块交给模型，serialize 降级为本地
++      // 路径文本，模型自己拿语音路径去本地识别，用户不可控。现在失败即抛错，
++      // 前端收到 attachment-error + message，提示先配置 ASR 服务。
++      const text = await transcribeVoice(voiceObjectPath(root, attachment.voiceId))
++      if (text === '') {
++        throw new AttachmentError(
++          '语音识别失败：ASR 服务未配置或识别出错，请先在「设置 → 语音服务」配置 ASR 后重试。',
++          'VOICE_ASR_FAILED',
++        )
++      }
++      attachment = { ...attachment, transcript: text }
 +      blocks.push({ type: 'voice', attachment })
 +      continue
 +    }
@@ -2011,7 +2055,7 @@ index ccb2d6d20c..a2579fab12 100644
  /** Search durable content for an image reference, including nested tool results. */
  function imageBlockIn(content: unknown, match: (ref: ImageAttachmentRef) => boolean): ImageAttachmentRef | undefined {
    if (!Array.isArray(content)) return undefined
-@@ -181,9 +304,68 @@ function imageInEvent(event: SessionEvent, match: (ref: ImageAttachmentRef) => b
+@@ -181,9 +314,68 @@ function imageInEvent(event: SessionEvent, match: (ref: ImageAttachmentRef) => b
    return undefined
  }
  
@@ -2083,7 +2127,7 @@ index ccb2d6d20c..a2579fab12 100644
  }
  
  /** Resolve the first reference matching one opaque id. */
-@@ -1299,6 +1481,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+@@ -1299,6 +1491,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
      broadcast({ type: 'session/queue', sessionId: session.id, items: queueItems(agent, event.data) })
    })
  
@@ -2095,7 +2139,7 @@ index ccb2d6d20c..a2579fab12 100644
    /** Remove a wait before settling it: synchronous deletion makes the first claimant win. */
    function claimQuestion(pending: PendingQuestion, outcome: 'answered' | 'cancelled'): void {
      pendingQuestions.delete(pending.rpcId)
-@@ -2208,18 +2395,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+@@ -2208,18 +2405,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                  ? {}
                  : { reasoningEffort: ReasoningEffortId(reasoningEffort) },
              })
@@ -2119,7 +2163,7 @@ index ccb2d6d20c..a2579fab12 100644
              const selected: ModelSelection = {
                provider: resolved.provider,
                model: resolved.model,
-@@ -2396,23 +2576,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+@@ -2396,23 +2586,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
            ...(canonicalTimeZone === undefined ? {} : { clientTimeZone: canonicalTimeZone }),
          }
          const hasImage = content.some(part => part.type === 'image')
@@ -2148,15 +2192,16 @@ index ccb2d6d20c..a2579fab12 100644
 +              agent.steer(message)
 +            } else {
 +              // [本地改造 2026-08-16] 语音消息与文本/图片一样走正常 followup：voice
-+              // 块立即入队上屏（前端语音卡片可播放），agent 唤醒后从序列化文本拿到
-+              // 本地语音路径，主动调本地 ASR 工具识别——识别结果在助手侧显示。
-+              // host 不再后台转写后二次注入"用户身份"的识别文本。
++              // 块入队上屏（前端语音卡片可播放），识别文本已写入 attachment.transcript，
++              // 模型从序列化文本直接拿到转写内容。
++              // [本地改造 2026-08-21] ASR 识别失败的语音消息在 durablePromptContent
++              // 阶段即被阻断（VOICE_ASR_FAILED），不会走到这里。
 +              agent.followup(message)
 +            }
            } catch (error: unknown) {
              if (error instanceof AttachmentError) {
                return err(request, {
-@@ -2429,7 +2609,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+@@ -2429,7 +2620,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
            }
            return ok(request, { accepted: true as const })
          }
@@ -2165,7 +2210,7 @@ index ccb2d6d20c..a2579fab12 100644
        },
  
        async attachment(request) {
-@@ -2481,6 +2661,129 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+@@ -2481,6 +2672,129 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
          }
        },
  
@@ -2295,7 +2340,7 @@ index ccb2d6d20c..a2579fab12 100644
        updateQueue(request) {
          const { sessionId, itemId, action } = request.payload
          if (action.kind === 'edit' && action.content.some(block => block.type !== 'text')) {
-@@ -3340,6 +3643,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+@@ -3340,6 +3654,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
        },
      },
  
@@ -2917,10 +2962,10 @@ index ac6c770801..edbebc9539 100644
      // createApiProxy returns closures (no `this` capture), so the bind is
 diff --git a/packages/host/apiproxy/src/voice.ts b/packages/host/apiproxy/src/voice.ts
 new file mode 100644
-index 0000000000..010a71e8e8
+index 0000000000..33a3eb7d19
 --- /dev/null
 +++ b/packages/host/apiproxy/src/voice.ts
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,506 @@
 +/**
 + * Durable voice-object storage and local ASR transcription, mirroring the
 + * content-addressed attachment layout below `DSH_HOME/attachments/v1`.
@@ -2933,10 +2978,10 @@ index 0000000000..010a71e8e8
 +
 +import { createHash, randomUUID } from 'node:crypto'
 +import { mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises'
-+import { constants } from 'node:fs'
++import { constants, readFileSync } from 'node:fs'
 +import { homedir } from 'node:os'
 +import { join, resolve } from 'node:path'
-+import { spawn, execFileSync } from 'node:child_process'
++import { spawn, spawnSync, execFileSync } from 'node:child_process'
 +import type { VoiceAttachmentRef, VoiceMediaType } from './api/sessions.ts'
 +import { edgeTts } from './edge-tts.ts'
 +
@@ -3027,20 +3072,76 @@ index 0000000000..010a71e8e8
 +export const ASR_SERVICE_URL = process.env.DSH_ASR_SERVICE_URL ?? 'http://127.0.0.1:18790/transcribe'
 +
 +/**
-+ * Transcribe one recording through the local ASR service. The browser container
-+ * (webm/ogg) is transcoded to 16 kHz mono WAV first, since sherpa-onnx reads
-+ * WAV directly. Never throws on recognition failure — returns an empty string
-+ * so the caller can degrade the model copy.
-+ * @param audioPath - absolute path of the stored recording.
-+ * @returns recognized text, or '' when the service is unavailable or fails.
++ * 读取插件 dsh-host-voice 写入的 ~/.dsh/voice-config.json 的 ASR 配置，
++ * 让设置页的 ASR 模式（service / cmd / api）真正作用于后台自动识别主链路，
++ * 而不是永远硬编码打 18790。读取失败或无配置时返回 null，调用方退回默认
++ * 常驻服务，保持旧行为。
++ */
++interface AsrConfig {
++  enabled: boolean
++  mode: 'service' | 'cmd' | 'api'
++  url: string
++  cmd: string
++  apiKey: string
++  apiBaseUrl: string
++}
++
++function loadAsrConfig(): AsrConfig | null {
++  const path = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'voice-config.json')
++  try {
++    const parsed = JSON.parse(readFileSync(path, 'utf8'))
++    const asr = parsed?.engines?.asr
++    if (asr === undefined || asr === null || typeof asr !== 'object') return null
++    return {
++      enabled: asr.enabled !== false,
++      mode: asr.mode === 'cmd' || asr.mode === 'api' ? asr.mode : 'service',
++      url: typeof asr.url === 'string' && asr.url.trim() !== '' ? asr.url : 'http://127.0.0.1:18790',
++      cmd: typeof asr.cmd === 'string' ? asr.cmd : '',
++      apiKey: typeof asr.apiKey === 'string' ? asr.apiKey : '',
++      apiBaseUrl: typeof asr.apiBaseUrl === 'string' && asr.apiBaseUrl.trim() !== ''
++        ? asr.apiBaseUrl
++        : 'https://api.xiaomimimo.com/v1',
++    }
++  } catch {
++    return null
++  }
++}
++
++/**
++ * 转写一段录音。路由优先级：
++ *  1) 环境变量 DSH_ASR_SERVICE_URL（硬覆盖，保持旧行为，仍只认 service 风格 {audioPath}）；
++ *  2) 读 voice-config.json 的 engines.asr，按 mode 路由：
++ *     - cmd：本地命令（sherpa-onnx-offline.exe，结果在 stderr，合并双流解析 "text"）；
++ *     - api：在线 ASR（小米 mimo-v2.5-asr / OpenAI Whisper 兼容）；
++ *     - service（默认）：POST {audioPath} 到 asr.url/transcribe；
++ *  3) 无配置 / 未启用：退回默认常驻服务 18790。
++ * 浏览器容器（webm/ogg）先转 16kHz 单声道 WAV，sherpa 只认标准 wav。
++ * 识别失败绝不抛错，返回 '' 让调用方降级。
++ * @param audioPath - 已落盘录音的绝对路径。
++ * @returns 识别文本，或 ''（服务不可用 / 失败）。
 + */
 +export async function transcribeVoice(audioPath: string): Promise<string> {
 +  let wavPath: string | undefined
++  const controller = new AbortController()
++  const timer = setTimeout(() => { controller.abort() }, 35_000)
 +  try {
 +    wavPath = await transcodeToWav(audioPath)
-+    const controller = new AbortController()
-+    const timer = setTimeout(() => { controller.abort() }, 35_000)
-+    try {
++    // 1) 环境变量硬覆盖（保持旧行为）
++    const envUrl = process.env.DSH_ASR_SERVICE_URL
++    if (envUrl !== undefined && envUrl.trim() !== '') {
++      const response = await fetch(envUrl, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ audioPath: wavPath }),
++        signal: controller.signal,
++      })
++      if (!response.ok) return ''
++      const payload = await response.json() as { text?: unknown }
++      return typeof payload.text === 'string' ? payload.text : ''
++    }
++    // 2) 读插件配置，按 asr.mode 路由
++    const asr = loadAsrConfig()
++    if (asr === null || !asr.enabled) {
 +      const response = await fetch(ASR_SERVICE_URL, {
 +        method: 'POST',
 +        headers: { 'Content-Type': 'application/json' },
@@ -3050,12 +3151,91 @@ index 0000000000..010a71e8e8
 +      if (!response.ok) return ''
 +      const payload = await response.json() as { text?: unknown }
 +      return typeof payload.text === 'string' ? payload.text : ''
-+    } finally {
-+      clearTimeout(timer)
 +    }
++    if (asr.mode === 'cmd') {
++      // [本地改造 2026-08-21] cmd 模式缺命令配置 = 明确失败，绝不降级到常驻服务
++      if (asr.cmd.trim() === '') {
++        console.error('[asr] cmd 模式但未配置本地命令，识别失败（不降级常驻服务）')
++        return ''
++      }
++      const parts = asr.cmd.trim().split(/\s+/)
++      const bin = parts[0]
++      if (bin !== undefined) {
++        const result = spawnSync(bin, [...parts.slice(1), wavPath], {
++          windowsHide: true,
++          encoding: 'utf-8',
++          timeout: 60_000,
++          stdio: ['ignore', 'pipe', 'pipe'],
++        })
++        const all = (result.stdout ?? '') + '\n' + (result.stderr ?? '')
++        const m = all.match(/"text"\s*:\s*"([^"]*)"/)
++        return (m?.[1] ?? '').trim()
++      }
++      return ''
++    }
++    if (asr.mode === 'api') {
++      // [本地改造 2026-08-21] api 模式缺 key = 明确失败，绝不降级到常驻服务
++      if (asr.apiKey.trim() === '') {
++        console.error('[asr] api 模式但未配置 API Key，识别失败（不降级常驻服务）')
++        return ''
++      }
++      const apiKey = asr.apiKey.trim()
++      const baseUrl = asr.apiBaseUrl.replace(/\/+$/, '')
++      const audioBase64 = (await readFile(audioPath)).toString('base64')
++      if (baseUrl.includes('openai')) {
++        const form = new FormData()
++        const blob = new Blob([Buffer.from(audioBase64, 'base64')], { type: 'audio/wav' })
++        form.append('file', blob, 'audio.wav')
++        form.append('model', 'whisper-1')
++        const response = await fetch(`${baseUrl}/audio/transcriptions`, {
++          method: 'POST',
++          headers: { Authorization: `Bearer ${apiKey}` },
++          body: form,
++          signal: controller.signal,
++        })
++        if (!response.ok) return ''
++        const payload = await response.json() as { text?: unknown }
++        return typeof payload.text === 'string' ? payload.text.trim() : ''
++      }
++      const response = await fetch(`${baseUrl}/chat/completions`, {
++        method: 'POST',
++        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          model: 'mimo-v2.5-asr',
++          messages: [
++            {
++              role: 'user',
++              content: [
++                { type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${audioBase64}` } },
++              ],
++            },
++          ],
++          extra_body: { asr_options: { language: 'auto' } },
++        }),
++        signal: controller.signal,
++      })
++      if (!response.ok) return ''
++      const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> }
++      const text = typeof payload.choices?.[0]?.message?.content === 'string'
++        ? payload.choices[0].message.content.trim()
++        : ''
++      return text
++    }
++    // 3) service 模式（默认）：POST {audioPath} 到 asr.url/transcribe
++    const baseUrl = asr.url.trim().replace(/\/+$/, '')
++    const response = await fetch(`${baseUrl}/transcribe`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ audioPath: wavPath }),
++      signal: controller.signal,
++    })
++    if (!response.ok) return ''
++    const payload = await response.json() as { text?: unknown }
++    return typeof payload.text === 'string' ? payload.text : ''
 +  } catch {
 +    return ''
 +  } finally {
++    clearTimeout(timer)
 +    if (wavPath !== undefined) await unlink(wavPath).catch(() => {})
 +  }
 +}
