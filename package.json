@@ -1,12 +1,13 @@
 {
   "name": "@oadank/dsh-input-tools",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": { "default": "./lib/index.js" },
     "./client": { "default": "./lib/client.js" },
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
@@ -15,6 +16,9 @@
     "cordis.patch.yml"
   ],
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-runtime"
@@ -29,5 +33,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "DSH 语音能力一体化插件（单包双入口）：host=语音工具/TTS六引擎/ASR/克隆/自动回复；client=输入框工具条/语音设置页/复制按钮。npm 安装后 cordis.patch.yml 注册 @oadank/dsh-input-tools 即可"
+  "description": "DSH 语音能力一体化插件（bundle 单包双入口）：host=语音工具/TTS六引擎/ASR/克隆/自动回复；client=输入框工具条/语音设置页/复制按钮。dsh plugin --profile web add @oadank/dsh-input-tools 一键安装注册"
 }
