@@ -1,9 +1,13 @@
 {
   "name": "@oadank/dsh-input-tools",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "private": false,
   "type": "module",
   "main": "lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oadank/dsh-input-tools.git"
+  },
   "exports": {
     ".": { "default": "./lib/index.js" },
     "./client": { "default": "./lib/client.js" },

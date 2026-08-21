@@ -20,7 +20,7 @@ $Marker = "本地改造 2026-08-14"   # 补丁内的指纹标记（api-request-t
 function Find-Repo {
   # 1. 显式指定
   if ($RepoPath -ne "" -and (Test-Path (Join-Path $RepoPath ".git"))) { return $RepoPath }
-  # 2. 当前目录及向上 6 层
+  # 2. 当前目录及向上 6 层（脚本可能放在源码仓库里/附近）
   $cur = (Get-Location).Path
   for ($i = 0; $i -le 6; $i++) {
     if (Test-Path (Join-Path $cur ".git")) { return $cur }
@@ -28,18 +28,7 @@ function Find-Repo {
     if ($parent -eq $cur) { break }
     $cur = $parent
   }
-  # 3. 常见安装路径
-  $candidates = @(
-    "D:\opt\deepseek-harness\deepseek-harness",
-    "C:\D\opt\deepseek-harness\deepseek-harness",
-    "D:\deepseek-harness\deepseek-harness",
-    "C:\deepseek-harness\deepseek-harness",
-    "D:\opt\deepseek-harness",
-    "C:\D\opt\deepseek-harness"
-  )
-  foreach ($c in $candidates) {
-    if (Test-Path (Join-Path $c ".git")) { return $c }
-  }
+  # 3. 找不到了——不猜固定路径（客户源码位置可能在任何盘符），返回空让用户输入
   return $null
 }
 
@@ -50,10 +39,19 @@ if ($RepoPath -eq "") {
     $RepoPath = $found
     Write-Host "自动检测到源码仓库: $RepoPath" -ForegroundColor Green
   } else {
-    Write-Host "未自动检测到源码仓库。请把本脚本放到源码仓库根目录运行，" -ForegroundColor Yellow
-    Write-Host "或 -RepoPath 参数指定，例如：" -ForegroundColor Yellow
-    Write-Host "  powershell -ExecutionPolicy Bypass -File apply-voice-patch.ps1 -RepoPath D:\opt\deepseek-harness\deepseek-harness" -ForegroundColor Yellow
-    exit 1
+    # 找不到 → 交互式让用户输入源码路径（不限定任何盘符/位置）
+    Write-Host "`n未自动检测到源码仓库。" -ForegroundColor Yellow
+    Write-Host "请把源码仓库根目录（git clone 出来的 deepseek-harness 文件夹）路径告诉我："
+    $input = Read-Host "dsh 源码仓库路径"
+    if ($input -ne "" -and (Test-Path (Join-Path $input ".git"))) {
+      $RepoPath = $input.Trim().Trim('"').Trim("'")
+      Write-Host "已使用: $RepoPath" -ForegroundColor Green
+    } else {
+      Write-Host "路径无效或不是 git 仓库（需要包含 .git 目录）。" -ForegroundColor Red
+      Write-Host "可用 -RepoPath 参数直接指定：" -ForegroundColor Yellow
+      Write-Host "  powershell -ExecutionPolicy Bypass -File apply-voice-patch.ps1 -RepoPath D:\anywhere\deepseek-harness" -ForegroundColor Yellow
+      exit 1
+    }
   }
 }
 Write-Host "源码目录: $RepoPath"
