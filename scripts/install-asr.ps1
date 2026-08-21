@@ -58,6 +58,39 @@ New-Item -ItemType Directory -Force -Path "$InstallDir\models" | Out-Null
 New-Item -ItemType Directory -Force -Path "$InstallDir\bin" | Out-Null
 New-Item -ItemType Directory -Force -Path "$InstallDir\tmp" | Out-Null
 
+# ---- 1b. 下载/解压工具函数（2026-08-21 增强：断点续传 + 完整性校验 + 损坏自动重试）----
+# 之前 XDN 实测：GitHub 大文件下载中断 → 只下了 42.7MB/230MB → tar 报 Truncated → 脚本抛错退出，
+# 用户只看到"跑到最后报错"毫无提示。现在 curl -C - 断点续传 + 解压后校验，损坏文件自动删除重下。
+function Download-Resume {
+  param([string]$Url, [string]$OutFile)
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    Write-Host "  下载（第 $attempt 次尝试）: $Url" -ForegroundColor Yellow
+    # Windows 10+ 自带 curl.exe；-C - 断点续传；--retry 网络层重试
+    & curl.exe -L -C - --retry 3 --retry-delay 2 --connect-timeout 20 -o $OutFile $Url 2>$null
+    if ($LASTEXITCODE -eq 0) { return $true }
+    Write-Host "  下载中断（exit=$LASTEXITCODE），3 秒后重试..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
+  }
+  return $false
+}
+function Expand-TarBz2 {
+  param([string]$Archive, [string]$Dest, [int]$Strip = 0)
+  $tmpDir = Join-Path $Dest ".extract-tmp"
+  New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+  $tarArgs = @('-xjf', $Archive, '-C', $tmpDir)
+  if ($Strip -gt 0) { $tarArgs += "--strip-components=$Strip" }
+  tar @tarArgs 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  解压失败：压缩包损坏或不完整（$Archive）" -ForegroundColor Red
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    Remove-Item -Force $Archive -ErrorAction SilentlyContinue
+    return $false
+  }
+  Get-ChildItem $tmpDir | Move-Item -Destination $Dest -Force -ErrorAction SilentlyContinue
+  Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+  return $true
+}
+
 # ---- 2. 检查 ffmpeg（ASR 转码必需）----
 Write-Host "`n[1/4] 检查 ffmpeg..." -ForegroundColor Yellow
 $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
@@ -79,12 +112,15 @@ Write-Host "`n[2/4] 下载 sherpa-onnx $Version ..." -ForegroundColor Yellow
 $pkgUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/$Version/sherpa-onnx-$Version-win-x64-shared-MD-Release.tar.bz2"
 $pkgFile = "$InstallDir\tmp\sherpa-onnx.tar.bz2"
 if (-not (Test-Path "$InstallDir\bin\sherpa-onnx-offline.exe")) {
-  if (-not (Test-Path $pkgFile)) {
-    Write-Host "  下载 $pkgUrl"
-    Invoke-WebRequest -Uri $pkgUrl -OutFile $pkgFile -UseBasicParsing
+  if (-not (Download-Resume $pkgUrl $pkgFile)) {
+    Write-Host "  sherpa-onnx 下载失败（网络不稳定）。请检查网络后重跑本脚本" -ForegroundColor Red
+    exit 1
   }
   Write-Host "  解压..."
-  tar -xjf $pkgFile -C "$InstallDir\tmp"
+  if (-not (Expand-TarBz2 $pkgFile "$InstallDir\tmp")) {
+    Write-Host "  sherpa-onnx 压缩包损坏已删除，请重跑本脚本自动重新下载" -ForegroundColor Red
+    exit 1
+  }
   # 解压后目录结构：sherpa-onnx-v1.13.6-win-x64-shared-MD-Release/ 内含 bin/ lib/
   $extracted = Get-ChildItem "$InstallDir\tmp" -Directory | Where-Object { $_.Name -like "sherpa-onnx-*win*" } | Select-Object -First 1
   if ($extracted) {
@@ -99,19 +135,28 @@ if (-not (Test-Path "$InstallDir\bin\sherpa-onnx-offline.exe")) {
   Write-Host "  sherpa-onnx 已存在，跳过下载" -ForegroundColor Green
 }
 
-# ---- 4. 下载 SenseVoice 模型 ----
+# ---- 4. 下载 SenseVoice 模型（断点续传 + 完整性校验）----
 Write-Host "`n[3/4] 下载 SenseVoice int8 模型..." -ForegroundColor Yellow
 $modelDir = "$InstallDir\models\sensevoice-int8"
 $modelUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2"
 $modelFile = "$InstallDir\tmp\sensevoice.tar.bz2"
 if (-not (Test-Path "$modelDir\model.int8.onnx")) {
-  if (-not (Test-Path $modelFile)) {
-    Write-Host "  下载 $modelUrl"
-    Invoke-WebRequest -Uri $modelUrl -OutFile $modelFile -UseBasicParsing
+  if (-not (Download-Resume $modelUrl $modelFile)) {
+    Write-Host "  SenseVoice 模型下载失败（网络不稳定）。请检查网络后重跑本脚本" -ForegroundColor Red
+    exit 1
   }
   New-Item -ItemType Directory -Force -Path $modelDir | Out-Null
   Write-Host "  解压模型..."
-  tar -xjf $modelFile -C $modelDir --strip-components=1
+  if (-not (Expand-TarBz2 $modelFile $modelDir 1)) {
+    Write-Host "  模型压缩包损坏已删除，请重跑本脚本自动重新下载" -ForegroundColor Red
+    exit 1
+  }
+  if (-not (Test-Path "$modelDir\model.int8.onnx")) {
+    Write-Host "  解压后未找到 model.int8.onnx（压缩包异常），已清理。请重跑本脚本" -ForegroundColor Red
+    Remove-Item -Recurse -Force $modelDir -ErrorAction SilentlyContinue
+    Remove-Item -Force $modelFile -ErrorAction SilentlyContinue
+    exit 1
+  }
   Write-Host "  模型解压完成" -ForegroundColor Green
 } else {
   Write-Host "  模型已存在，跳过下载" -ForegroundColor Green
