@@ -1,0 +1,75 @@
+# ============================================================
+# dsh-input-tools 语音源码补丁脚本（Windows）
+# 作用：给【官方源码】版 deepseek-harness 打上语音增强补丁
+#   （原生语音消息气泡 / AI 语音回复 / voice content 契约）
+# 适用版本：官方 deepseek-harness rc.8（commit 141eb6fef8，
+#   即 dsh-0.1.0-rc.8 release 合并点）
+# 用法：在源码仓库根目录执行（或 -RepoPath 指定）：
+#   powershell -ExecutionPolicy Bypass -File apply-voice-patch.ps1
+# 前置：已 git clone 官方仓库并 checkout 到 rc.8 基线
+# ============================================================
+param(
+  [string]$RepoPath = (Get-Location).Path
+)
+
+$ErrorActionPreference = "Stop"
+$Patch = Join-Path $PSScriptRoot "dsh-voice-rc8.patch"
+$Marker = "本地改造 2026-08-14"   # 补丁内的指纹标记（api-request-trust.ts）
+
+Write-Host "==== dsh 语音源码补丁 ====" -ForegroundColor Cyan
+Write-Host "源码目录: $RepoPath"
+Write-Host "补丁文件: $Patch"
+
+# 1. 校验 git 仓库
+if (-not (Test-Path (Join-Path $RepoPath ".git"))) {
+  Write-Host "  错误：$RepoPath 不是 git 仓库（未 git clone 官方源码？）" -ForegroundColor Red
+  exit 1
+}
+Set-Location $RepoPath
+
+# 2. 幂等：已打过则跳过
+if (Test-Path "packages\client\connection\src\api-request-trust.ts") {
+  if (Select-String -Path "packages\client\connection\src\api-request-trust.ts" -Pattern $Marker -Quiet) {
+    Write-Host "  检测到语音补丁已应用，跳过。" -ForegroundColor Green
+    exit 0
+  }
+}
+
+# 3. 应用前自检（git apply --check 不实际改动）
+Write-Host "`n[1/3] 校验补丁可应用..." -ForegroundColor Yellow
+git apply --check $Patch
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "  补丁无法应用：请确认源码是官方 rc.8（git checkout 到 commit 141eb6fef8 或 tag dsh-0.1.0-rc.8）。" -ForegroundColor Red
+  Write-Host "  官方更新后的 master 与本补丁不兼容，请勿在 master 上直接应用。" -ForegroundColor Yellow
+  exit 1
+}
+Write-Host "  校验通过。" -ForegroundColor Green
+
+# 4. 备份当前未提交改动（用于回滚）
+Write-Host "`n[2/3] 备份当前工作区改动..." -ForegroundColor Yellow
+$Backup = Join-Path $RepoPath (".voice-patch-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".patch")
+git diff > $Backup 2>$null
+if ((Get-Item $Backup).Length -gt 0) {
+  Write-Host "  已有未提交改动，已备份到 $Backup" -ForegroundColor Green
+} else {
+  Remove-Item $Backup -Force -ErrorAction SilentlyContinue
+  Write-Host "  工作区干净，无需备份。" -ForegroundColor Green
+}
+
+# 5. 应用补丁
+Write-Host "`n[3/3] 应用语音补丁..." -ForegroundColor Yellow
+git apply $Patch
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "  补丁应用失败（已备份可回滚）" -ForegroundColor Red
+  exit 1
+}
+Write-Host "  补丁已应用！" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "==== 完成 ====" -ForegroundColor Cyan
+Write-Host "后续步骤："
+Write-Host "  1. pnpm install"
+Write-Host "  2. pnpm run build:web     （构建前端，语音气泡渲染在此步生效）"
+Write-Host "  3. dsh --profile web      或 nssm 服务方式启动"
+Write-Host "  4. 安装语音插件：dsh plugin --profile web add @oadank/dsh-input-tools"
+Write-Host "回滚：git checkout -- <文件> 或 git apply -R $Patch"
