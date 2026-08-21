@@ -9,14 +9,53 @@
 # 前置：已 git clone 官方仓库并 checkout 到 rc.8 基线
 # ============================================================
 param(
-  [string]$RepoPath = (Get-Location).Path
+  [string]$RepoPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Patch = Join-Path $PSScriptRoot "dsh-voice-rc8.patch"
 $Marker = "本地改造 2026-08-14"   # 补丁内的指纹标记（api-request-trust.ts）
 
+# ── 自动探测源码仓库位置（小白无需知道路径）────────────────────
+function Find-Repo {
+  # 1. 显式指定
+  if ($RepoPath -ne "" -and (Test-Path (Join-Path $RepoPath ".git"))) { return $RepoPath }
+  # 2. 当前目录及向上 6 层
+  $cur = (Get-Location).Path
+  for ($i = 0; $i -le 6; $i++) {
+    if (Test-Path (Join-Path $cur ".git")) { return $cur }
+    $parent = Split-Path $cur -Parent
+    if ($parent -eq $cur) { break }
+    $cur = $parent
+  }
+  # 3. 常见安装路径
+  $candidates = @(
+    "D:\opt\deepseek-harness\deepseek-harness",
+    "C:\D\opt\deepseek-harness\deepseek-harness",
+    "D:\deepseek-harness\deepseek-harness",
+    "C:\deepseek-harness\deepseek-harness",
+    "D:\opt\deepseek-harness",
+    "C:\D\opt\deepseek-harness"
+  )
+  foreach ($c in $candidates) {
+    if (Test-Path (Join-Path $c ".git")) { return $c }
+  }
+  return $null
+}
+
 Write-Host "==== dsh 语音源码补丁 ====" -ForegroundColor Cyan
+if ($RepoPath -eq "") {
+  $found = Find-Repo
+  if ($found) {
+    $RepoPath = $found
+    Write-Host "自动检测到源码仓库: $RepoPath" -ForegroundColor Green
+  } else {
+    Write-Host "未自动检测到源码仓库。请把本脚本放到源码仓库根目录运行，" -ForegroundColor Yellow
+    Write-Host "或 -RepoPath 参数指定，例如：" -ForegroundColor Yellow
+    Write-Host "  powershell -ExecutionPolicy Bypass -File apply-voice-patch.ps1 -RepoPath D:\opt\deepseek-harness\deepseek-harness" -ForegroundColor Yellow
+    exit 1
+  }
+}
 Write-Host "源码目录: $RepoPath"
 Write-Host "补丁文件: $Patch"
 

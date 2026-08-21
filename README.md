@@ -29,9 +29,21 @@
 - **语音设置页**（设置 → 语音服务）：引擎折叠卡片、小米三模型分区、克隆样本管理、ASR 模式、试听（合成/原声）。
 - **语音消息复制按钮**：用户/AI 语音条尾部复制转写文本。
 
-## 安装（三步）
+## 安装
 
 > `~/.dsh` 指 DSH Web 运行时目录（Windows 为 `C:\Users\<你>\.dsh`）。
+
+### 方式一（推荐）：npm 一键安装
+
+```bash
+dsh plugin --profile web add @oadank/dsh-input-tools
+```
+
+自动完成：下载 npm 包 → 装入 profile → 注册 `cordis.patch.yml` → 重启 dsh-web 生效。
+（补丁脚本 `patches/apply-voice-patch.ps1` 也已随包发布，路径在
+`node_modules\@oadank\dsh-input-tools\patches\`。）
+
+### 方式二：手动拷包（离线/开发）
 
 1. **拷插件包**：把本仓库 `lib/`、`package.json` 拷到
    `~/.dsh/profiles/node_modules/@oadank/dsh-input-tools/`
@@ -87,23 +99,36 @@ ASR 模式都在设置页「语音服务」分区配置。
 ## 语音源码补丁（完整体验原生语音消息，可选）
 
 dsh 的 npm 安装版（0.1.0-rc.7）**契约不支持原生语音消息**（voice content、语音消息气泡、
-AI 语音回复条均为本地源码增强，官方源码/官方发布版默认都没有）。要用完整语音体验：
+AI 语音回复条均为本地源码增强，官方源码/官方发布版默认都没有）。要用完整语音体验，
+**必须使用官方源码 + 本补丁**（推荐），或直接使用本项目 fork（oadank/deepseek-harness）。
 
-1. **官方源码安装**：
+### 完整安装流程（小白照做）
+
+1. **官方源码安装**（无 git 先装 git；Windows 建议装到 D:\opt 下）：
    ```bash
    git clone https://github.com/deepseek-ai/deepseek-harness.git
+   cd deepseek-harness
    git checkout 141eb6fef8        # 官方 dsh-0.1.0-rc.8 release 合并点
    ```
-2. **打语音补丁**（Windows，在仓库根目录跑 patches 里的脚本）：
-   apply-voice-patch.ps1 自动：检测 git 仓库 → 校验补丁可应用 → 备份未提交改动 → 应用 → 幂等（已打跳过）。
+2. **打语音补丁**（Windows 管理员 PowerShell，脚本会自动探测源码位置，
+   也可以在源码仓库根目录直接运行）：
+   ```powershell
+   # 插件 npm 安装后，补丁在本机位置：
+   cd node_modules\@oadank\dsh-input-tools\patches
+   powershell -ExecutionPolicy Bypass -File apply-voice-patch.ps1
+   ```
+   脚本自动：探测/指定源码仓库 → 校验补丁可应用 → 备份未提交改动 → 应用 → 幂等（已打跳过）。
 3. **构建并启动**：
    ```bash
    pnpm install
    pnpm run build:web            # 前端语音气泡渲染在此步生效
-   dsh --profile web
+   dsh --profile web             # 或注册 nssm 服务方式启动
    ```
-4. **安装语音插件**：dsh plugin --profile web add @oadank/dsh-input-tools
+4. **安装语音插件**：`dsh plugin --profile web add @oadank/dsh-input-tools`
+5. **可选：本地 ASR**：运行插件内 `scripts\install-asr.ps1`（管理员），
+   自动下载 sherpa-onnx + SenseVoice 模型、注册 `asr` 常驻服务（端口 18790）。
 
+> 补丁/脚本已随 npm 包发布（`patches/` 目录），git 仓库同步维护。
 > 警告：补丁基于官方 rc.8（141eb6fef8）。官方 master 更新后补丁可能冲突，请 checkout 到该基线或等待补丁更新。回滚：git apply -R 或 git checkout -- 文件。勿在官方 master 上直接打补丁。
 
 **npm 版（rc.7）说明**：语音输入（录音→ASR→发送）可用；AI 语音可合成（音频生成）；但语音消息气泡/语音回复条受 rc.7 前端限制无法原生显示（插件 DOM 注入方案受 React 重渲染影响不稳定，已禁用）。完整体验请使用上面的源码版。
