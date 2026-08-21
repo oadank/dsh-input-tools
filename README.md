@@ -83,3 +83,27 @@ ASR 模式都在设置页「语音服务」分区配置。
 由 `dsh-composer-plugin`（client 工具条）与 `dsh-host-voice`（host 语音）合并重写而来，
 2026-08-21 统一为单包双入口。原 dsh-host-voice 的 git 历史备份在
 `plugins/_archive/dsh-voice-plugin-git-*.bundle`。
+
+## 语音源码补丁（完整体验原生语音消息，可选）
+
+dsh 的 npm 安装版（0.1.0-rc.7）**契约不支持原生语音消息**（voice content、语音消息气泡、
+AI 语音回复条均为本地源码增强，官方源码/官方发布版默认都没有）。要用完整语音体验：
+
+1. **官方源码安装**：
+   ```bash
+   git clone https://github.com/deepseek-ai/deepseek-harness.git
+   git checkout 141eb6fef8        # 官方 dsh-0.1.0-rc.8 release 合并点
+   ```
+2. **打语音补丁**（Windows，在仓库根目录跑 patches 里的脚本）：
+   apply-voice-patch.ps1 自动：检测 git 仓库 → 校验补丁可应用 → 备份未提交改动 → 应用 → 幂等（已打跳过）。
+3. **构建并启动**：
+   ```bash
+   pnpm install
+   pnpm run build:web            # 前端语音气泡渲染在此步生效
+   dsh --profile web
+   ```
+4. **安装语音插件**：dsh plugin --profile web add @oadank/dsh-input-tools
+
+> 警告：补丁基于官方 rc.8（141eb6fef8）。官方 master 更新后补丁可能冲突，请 checkout 到该基线或等待补丁更新。回滚：git apply -R 或 git checkout -- 文件。勿在官方 master 上直接打补丁。
+
+**npm 版（rc.7）说明**：语音输入（录音→ASR→发送）可用；AI 语音可合成（音频生成）；但语音消息气泡/语音回复条受 rc.7 前端限制无法原生显示（插件 DOM 注入方案受 React 重渲染影响不稳定，已禁用）。完整体验请使用上面的源码版。
