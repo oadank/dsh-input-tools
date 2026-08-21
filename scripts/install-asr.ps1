@@ -170,7 +170,9 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(PORT, () => console.log('[ASR] listening on ' + PORT));
 "@
-$serviceFile = "$InstallDir\asr-service.js"
+# 服务脚本用 .cjs：插件包 package.json 声明了 "type":"module"，.js 会被当 ESM 解析导致 require 报错
+# （2026-08-21 XDN 实测：asr-service.js 抛 ReferenceError: require is not defined）
+$serviceFile = "$InstallDir\asr-service.cjs"
 Set-Content -Path $serviceFile -Value $serviceScript -Encoding UTF8
 
 # ---- 6. 注册 nssm 服务 ----
