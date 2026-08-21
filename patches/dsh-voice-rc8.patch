@@ -429,7 +429,7 @@ index 54e5f6f98d..0ef782e759 100644
    /* 525px cap inside the 736 column; percentage keeps narrow windows sane. */
    max-width: 100%;
 diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
-index 8a882a70c5..2345dda83e 100644
+index 8a882a70c5..67aa18ba1a 100644
 --- a/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
 +++ b/packages/client/ui-conversation/src/client/chat/MessageItem.tsx
 @@ -3,11 +3,13 @@
@@ -736,7 +736,7 @@ index 8a882a70c5..2345dda83e 100644
  }
  
  /** User and admitted-steering keyed Chat renderer. */
-+type UserMessageNodeViewProps = ChatNodeViewProps<'user' | 'steering'>
++export type UserMessageNodeViewProps = ChatNodeViewProps<'user' | 'steering'>
 +  & PropsRenderSlots<'conversation.chat.user-actions' | 'conversation.chat.voice-actions'>
 +
  export const UserMessageNodeView = memo(function UserMessageNodeView({
