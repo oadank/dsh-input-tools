@@ -1,3 +1,27 @@
+diff --git a/packages/api/remotes/src/client/index.ts b/packages/api/remotes/src/client/index.ts
+index 6a5164f160..f5a57a5e65 100644
+--- a/packages/api/remotes/src/client/index.ts
++++ b/packages/api/remotes/src/client/index.ts
+@@ -44,6 +44,7 @@ export type {
+   RpcRequest, RpcResponse, RpcResult, SessionId, SessionModels, SessionSearchItem,
+   SessionSummary, SettingsNamespaceView, SettingsPathOpView, SkillEntry, StreamChunk,
+   SubagentAddress, SubagentCatalog, JobView, ToolCallView, ToolEventView, ToolResultView,
++  VoiceAttachmentRef, VoiceMediaType,
+   WorkspaceId, WorkspaceView,
+ } from '@deepseek-ai/dsh-client-connection/client'
+ export type {} from '@deepseek-ai/dsh-api-gateway/client'
+diff --git a/packages/attachment/attachment/src/error.ts b/packages/attachment/attachment/src/error.ts
+index 2e2d695dae..c91a4f862f 100644
+--- a/packages/attachment/attachment/src/error.ts
++++ b/packages/attachment/attachment/src/error.ts
+@@ -23,6 +23,7 @@ export type AttachmentErrorCode =
+   | 'ATTACHMENT_WRITE_FAILED'
+   | 'ATTACHMENT_NOT_FOUND'
+   | 'ATTACHMENT_READ_FAILED'
++  | 'VOICE_ASR_FAILED'
+ 
+ /** Runtime membership for structurally compatible errors crossing package boundaries. */
+ const IMAGE_ADMISSION_ERROR_CODE_SET: ReadonlySet<string> = new Set(IMAGE_ADMISSION_ERROR_CODES)
 diff --git a/packages/client/connection/src/api-request-trust.ts b/packages/client/connection/src/api-request-trust.ts
 index ea8914ccc6..1985ca7d08 100644
 --- a/packages/client/connection/src/api-request-trust.ts
@@ -3559,3 +3583,199 @@ index 77432c55af..6e2bfb5da4 100644
      events: {
        mux: (_request, signal) => stream(muxFrames, signal),
        host: (_request, signal) => stream(hostFrames, signal),
+diff --git a/packages/host/directory-picker-auto/src/resolve.ts b/packages/host/directory-picker-auto/src/resolve.ts
+index 395e2da55f..d1548d4961 100644
+--- a/packages/host/directory-picker-auto/src/resolve.ts
++++ b/packages/host/directory-picker-auto/src/resolve.ts
+@@ -13,7 +13,7 @@ export type DirectoryPickerBackendKind = 'native' | 'browse'
+ 
+ /** Environment keys the resolution reads (a `process.env` subset). */
+ export type DirectoryPickerEnv = Readonly<
+-  Partial<Record<'SSH_CONNECTION' | 'SSH_TTY' | 'DISPLAY' | 'WAYLAND_DISPLAY', string>>
++  Partial<Record<'SSH_CONNECTION' | 'SSH_TTY' | 'DISPLAY' | 'WAYLAND_DISPLAY' | 'DSH_FORCE_BROWSE_PICKER', string>>
+ >
+ 
+ /** Host facts the backend choice is a pure function of, sampled once at boot. */
+@@ -45,6 +45,10 @@ const present = (value: string | undefined): boolean => value !== undefined && v
+  * @returns the backend kind to mount.
+  */
+ export function resolveDirectoryPickerBackend(facts: DirectoryPickerHostFacts): DirectoryPickerBackendKind {
++  // [本地改造 2026-08-13] DSH_FORCE_BROWSE_PICKER=1 → 强制 browse（浏览器目录树）：
++  // Windows nssm 服务跑在 session 0，原生 IFileOpenDialog COM 对话框无交互桌面
++  // 弹不出（pick 卡死）。browse 是纯 HTTP 目录列表，session 0 完全可用。
++  if (facts.env.DSH_FORCE_BROWSE_PICKER === '1') return 'browse'
+   if (facts.bindHost !== '127.0.0.1') return 'browse'
+   if (present(facts.env.SSH_CONNECTION) || present(facts.env.SSH_TTY)) return 'browse'
+   if (facts.platform === 'darwin' || facts.platform === 'win32') return 'native'
+diff --git a/packages/llm/llm-deepseek/src/serialize.ts b/packages/llm/llm-deepseek/src/serialize.ts
+index 498b3fb2f7..a5e8458366 100644
+--- a/packages/llm/llm-deepseek/src/serialize.ts
++++ b/packages/llm/llm-deepseek/src/serialize.ts
+@@ -17,6 +17,7 @@ import type {
+   WireTool,
+   WireUserContentPart,
+ } from './types.ts'
++import { join } from 'node:path'
+ 
+ /** Adapter-level request defaults (from plugin config). */
+ export interface RequestDefaults {
+@@ -79,11 +80,58 @@ function flattenText(blocks: ContentBlock[]): string {
+     .join('')
+ }
+ 
+-/** Reject core image content before any text-flattening path can silently erase it. */
+-function assertTextOnly(blocks: readonly ContentBlock[]): void {
+-  if (contentHasImage(blocks)) {
+-    throw new LlmError('The DeepSeek chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
++/** [本地改造 2026-08-16] 把 image 块转成含本地附件路径的文本（参考 dsh-vscode-layout 补丁）：
++ * 文本模型收到路径后，必须通过视觉 MCP（mcp__visionqa__look / mcp__zai-vision__analyze_image）
++ * 识图；该文件无扩展名，read_image 等按扩展名校验的工具会拒绝，禁止使用。 */
++function imageAsText(block: ContentBlock): ContentBlock {
++  const ref = (block as { attachment?: { attachmentId?: unknown; name?: string; mediaType?: string } }).attachment
++  const rawId = typeof ref?.attachmentId === 'string' ? ref.attachmentId : ''
++  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
++  const name = typeof ref?.name === 'string' && ref.name.length > 0 ? ref.name : 'image'
++  const mediaType = ref?.mediaType ?? 'image/jpeg'
++  const home = process.env.DSH_HOME ?? ''
++  const path = hex.length > 0 && home !== ''
++    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
++    : '(unknown)'
++  return { type: 'text', text: `[用户发送了一张图片，名称 "${name}"，类型 ${mediaType}。请用视觉 MCP 工具识图（mcp__visionqa__look 或 mcp__zai-vision__analyze_image，传入 image_path），不要用 read_image（该文件无扩展名，read_image 会拒绝）：${path}]` }
++}
++
++function imagesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
++  return blocks.map((block) => {
++    if (block.type === 'image') return imageAsText(block)
++    if (block.type === 'tool-result') return { ...block, content: imagesAsText(block.content) }
++    return block
++  })
++}
++
++/** [本地改造 2026-08-16] 把 voice 块转成文本：attachment.transcript 存在时直接给出
++ * 识别文本（旧宿主链路兼容）；否则输出本地语音文件路径——agent 收到路径后主动调
++ * 本地 ASR 服务识别（与图片走视觉 MCP 同一模式），识别结果显示在助手侧。 */
++function voiceAsText(block: ContentBlock): ContentBlock {
++  const ref = (block as { attachment?: { voiceId?: unknown; durationMs?: unknown; transcript?: unknown } }).attachment
++  const rawId = typeof ref?.voiceId === 'string' ? ref.voiceId : ''
++  const hex = rawId.startsWith('sha256:') ? rawId.slice('sha256:'.length) : rawId
++  const transcript = typeof ref?.transcript === 'string' && ref.transcript.length > 0
++    ? ref.transcript
++    : null
++  const durationMs = typeof ref?.durationMs === 'number' ? ref.durationMs : null
++  const duration = durationMs === null ? '' : `（时长 ${Math.round(durationMs / 1000)} 秒）`
++  if (transcript !== null) {
++    return { type: 'text', text: `[用户发送了一条语音${duration}，识别内容：${transcript}]` }
+   }
++  const home = process.env.DSH_HOME ?? ''
++  const path = hex.length > 0 && home !== ''
++    ? join(home, 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
++    : '(unknown)'
++  return { type: 'text', text: `[用户发送了一条语音${duration}，本地语音文件路径: ${path}]` }
++}
++
++function voicesAsText(blocks: readonly ContentBlock[]): ContentBlock[] {
++  return blocks.map((block) => {
++    if (block.type === 'voice') return voiceAsText(block)
++    if (block.type === 'tool-result') return { ...block, content: voicesAsText(block.content) }
++    return block
++  })
+ }
+ 
+ /** Reject roles whose DeepSeek history format cannot carry image input. */
+@@ -203,19 +251,22 @@ function serializeAssistant(message: Message): WireMessage {
+ export function serializeMessages(messages: Message[]): WireMessage[] {
+   const wire: WireMessage[] = []
+   for (const message of messages) {
+-    assertTextOnly(message.content)
++    // [本地改造 2026-08-16] 图片块先转本地路径文本（imagesAsText），agent 用视觉 MCP 识图；
++    // 语音块同样转本地路径文本（voicesAsText），agent 用本地 ASR 服务识别——识别结果
++    // 以工具输出显示在助手侧（与识图同一模式），host 不再二次注入识别文本。
++    const content = voicesAsText(imagesAsText(message.content))
+     if (message.role === 'system') {
+-      wire.push({ role: 'system', content: flattenText(message.content) })
++      wire.push({ role: 'system', content: flattenText(content) })
+       continue
+     }
+     if (message.role === 'assistant') {
+-      wire.push(serializeAssistant(message))
++      wire.push(serializeAssistant({ ...message, content }))
+       continue
+     }
+     // user role: tool results ride in user messages in the harness
+     // vocabulary, but DeepSeek wants them as role:'tool' messages.
+-    const toolResults = message.content.filter(block => block.type === 'tool-result')
+-    const text = flattenText(message.content)
++    const toolResults = content.filter(block => block.type === 'tool-result')
++    const text = flattenText(content)
+     if (text.length > 0 || toolResults.length === 0) {
+       wire.push({ role: 'user', content: text })
+     }
+diff --git a/packages/llm/llm/src/types.ts b/packages/llm/llm/src/types.ts
+index 8c5be187dd..750496f164 100644
+--- a/packages/llm/llm/src/types.ts
++++ b/packages/llm/llm/src/types.ts
+@@ -74,6 +74,29 @@ export interface ImageBlock {
+   attachment: ImageAttachmentRef
+ }
+ 
++/**
++ * A durable voice recording reference, valid in user content today. The host
++ * persists the browser-uploaded bytes content-addressed beside image objects
++ * and transcribes them through the local ASR service; the transcript rides the
++ * reference so serialization can degrade cleanly when recognition fails.
++ */
++export interface VoiceBlock {
++  type: 'voice'
++  /** Immutable bytes and recognition metadata for one recording. */
++  attachment: {
++    /** Opaque storage identifier; never a filesystem path or bearer URL. */
++    voiceId: string
++    /** Recording container format from the browser wire (audio/mpeg added for TTS replies). */
++    mediaType: 'audio/webm' | 'audio/ogg' | 'audio/mp4' | 'audio/wav' | 'audio/mpeg'
++    /** Exact encoded byte length. */
++    bytes: number
++    /** Recorder-reported length in milliseconds. */
++    durationMs?: number
++    /** Local ASR transcript; absent when recognition failed or is unavailable. */
++    transcript?: string
++  }
++}
++
+ /** A tool invocation requested by the model. */
+ export interface ToolCallBlock {
+   type: 'tool-call'
+@@ -100,6 +123,7 @@ export interface ContentBlockMap {
+   'text': TextBlock
+   'reasoning': ReasoningBlock
+   'image': ImageBlock
++  'voice': VoiceBlock
+   'tool-call': ToolCallBlock
+   'tool-result': ToolResultBlock
+ }
+diff --git a/packages/subprocess/subprocess-local/src/spawn.ts b/packages/subprocess/subprocess-local/src/spawn.ts
+index 433ba01791..328f987893 100644
+--- a/packages/subprocess/subprocess-local/src/spawn.ts
++++ b/packages/subprocess/subprocess-local/src/spawn.ts
+@@ -275,10 +275,18 @@ export function killGroup(pid: number, sig: NodeJS.Signals): void {
+  */
+ export function taskkillProcessTree(pid: number): void {
+   if (pid <= 0) return
+-  // Outcome deliberately unchecked: an already-absent tree (status 128), exit
+-  // races, and a missing taskkill binary (spawnSync reports, never throws) are
+-  // as tolerable here as ESRCH is for a POSIX group signal.
+-  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
++  // [本地改造 2026-08-16] taskkill 优先用 System32 全路径：nssm 服务的 PATH 快照
++  // 曾缺 System32，导致 spawnSync('taskkill') ENOENT 静默失败、挂起进程永远杀不掉
++  // （超时/停止全部失效）。全路径 + PATH 兜底双保险。
++  const root = process.env.SystemRoot ?? 'C:\\Windows'
++  const candidates = [join(root, 'System32', 'taskkill.exe'), 'taskkill']
++  for (const command of candidates) {
++    // Outcome deliberately unchecked: an already-absent tree (status 128), exit
++    // races, and a missing taskkill binary (spawnSync reports, never throws) are
++    // as tolerable here as ESRCH is for a POSIX group signal.
++    const result = spawnSync(command, ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
++    if (result.error === undefined || (result.error as NodeJS.ErrnoException).code !== 'ENOENT') break
++  }
+ }
+ 
+ /**
