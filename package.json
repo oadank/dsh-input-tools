@@ -1,0 +1,25 @@
+{
+  "name": "@oadank/dsh-input-tools",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "workspace:*",
+    "ws": "*"
+  },
+  "description": "语音能力一体化插件（单包双入口）：host=语音工具/TTS/ASR/克隆/自动回复；client=输入框工具条/语音设置页/复制按钮"
+}

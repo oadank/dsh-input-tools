@@ -1,0 +1,5 @@
+# 分享用：追加到 ~/.dsh/profiles/web/cordis.patch.yml（insert 列表内），重启生效
+# 单插件双入口：host（语音工具/TTS/ASR/克隆/自动回复）+ client（输入框工具条/语音设置页/复制按钮）
+- insert:
+    - id: dsh-input-tools
+      name: '@oadank/dsh-input-tools'
