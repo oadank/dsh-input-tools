@@ -30,6 +30,28 @@
 - **语音设置页**（设置 → 语音服务）：引擎折叠卡片、小米三模型分区、克隆样本管理、ASR 模式、试听（合成/原声）。
 - **语音消息复制按钮**：用户/AI 语音条尾部复制转写文本。
 
+### 界面截图
+
+**输入框工具条**（图片 + 录音按钮）：
+
+![输入框工具条](assets/screenshots/input-toolbar.png)
+
+**语音设置页 —— 小米 TTS**（三模型分区：TTS / 音色设计 / 音色克隆）：
+
+![小米TTS设置页](assets/screenshots/voice-settings-xiaomi.png)
+
+**语音设置页 —— 本地 TTS 与阿里**：
+
+![本地TTS与阿里设置页](assets/screenshots/voice-settings-local-ali.png)
+
+**语音能力状态与 ASR 配置**：
+
+![语音能力与ASR配置](assets/screenshots/voice-capabilities-asr.png)
+
+**聊天语音消息展示**（用户/AI 语音气泡，可点击播放）：
+
+![语音消息展示](assets/screenshots/voice-message-bubbles.png)
+
 ## 安装
 
 > 这是 **dsh 的命令**（不是 `npm i -g`）：`dsh plugin` 会把插件装进指定的 profile
@@ -133,20 +155,30 @@ AI 语音回复条均为本地源码增强，官方源码/官方发布版默认�
 4. **安装语音插件**：`dsh plugin --profile web add @oadank/dsh-input-tools`
 5. **可选：本地 ASR**：见上文「可选：本地 ASR」。
 
-### 方案 B：直接克隆改造版（自带语音，零脚本）
+### 方案 B：直接克隆整合版（插件已内置，一键安装，推荐大多数用户）
 
-改造版 fork 已内置全部语音改造（与方案 A 打补丁后的结果一致），跳过第 2 步：
+整合版 fork **已内置全部语音改造 + 本语音插件**（`internal-plugins/dsh-input-tools/`），
+还带一键配置脚本（自动把插件注册进 profile、检查 ffmpeg），**clone 即用、零手工配置**：
 
 ```bash
 git clone https://github.com/oadank/deepseek-harness.git
 cd deepseek-harness
-# 已是语音改造版，无需 checkout / 无需打补丁
+# Windows：
+powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
+# Linux/macOS：
+bash scripts/setup-profile.sh
 pnpm install
 pnpm run build:web
 dsh --profile web
 ```
 
-之后同样执行「安装语音插件」和「可选：本地 ASR」。
+`setup-profile.ps1/.sh` 自动完成：把内置插件装进
+`~/.dsh/profiles/node_modules/@oadank/dsh-input-tools/` → 注册 `cordis.patch.yml`
+→ 检查 ffmpeg → 提示可选 ASR。之后**无需再执行 `dsh plugin add`**。
+
+- **可选：本地 ASR**：Windows 运行 `internal-plugins\dsh-input-tools\scripts\install-asr.ps1`；
+  Linux 见上文「可选：本地 ASR」。
+- **升级**：`git pull` 后重跑一次 setup 脚本即同步插件。
 
 ### 说明与限制
 
