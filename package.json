@@ -1,6 +1,6 @@
 {
   "name": "@oadank/dsh-input-tools",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "private": false,
   "type": "module",
   "main": "lib/index.js",
@@ -12,6 +12,7 @@
   },
   "files": [
     "lib",
+    "scripts",
     "README.md",
     "cordis.patch.yml"
   ],
