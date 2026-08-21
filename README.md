@@ -4,7 +4,8 @@
 - **host 入口**（`lib/index.js`）：语音工具 + TTS 六引擎 + ASR + 音色克隆 + 自动语音回复
 - **client 入口**（`lib/client.js`）：输入框工具条（图片/录音）+ 语音设置页 + 语音复制按钮
 
-不修改任何 DSH 源码，拷包 + 配一行 + 重启即用。
+插件本体**不修改任何 DSH 源码**，通过 `dsh plugin` 命令安装注册即可用基础语音功能；
+完整语音体验（语音消息气泡 / AI 语音回复条）需配合源码补丁，见文末「语音源码补丁」。
 
 ## 功能
 
@@ -31,9 +32,11 @@
 
 ## 安装
 
-> `~/.dsh` 指 DSH Web 运行时目录（Windows 为 `C:\Users\<你>\.dsh`）。
+> 这是 **dsh 的命令**（不是 `npm i -g`）：`dsh plugin` 会把插件装进指定的 profile
+> （`~/.dsh/profiles/<name>/node_modules/`），不是装到 npm 全局。
+> `~/.dsh` 指 DSH 运行时目录（Windows 为 `C:\Users\<你>\.dsh`）。
 
-### 方式一（推荐）：npm 一键安装
+### 方式一（推荐）：dsh plugin 一键安装
 
 ```bash
 dsh plugin --profile web add @oadank/dsh-input-tools
@@ -56,11 +59,20 @@ dsh plugin --profile web add @oadank/dsh-input-tools
          name: '@oadank/dsh-input-tools'
    ```
 
-3. **重启 dsh-web**：`nssm restart dsh-web`
+3. **重启 dsh-web 生效**（按你的系统选择一种）：
+   - Windows + nssm 服务：`nssm restart dsh-web`
+   - Linux + systemd：`systemctl restart dsh-web`
+   - 手动启动：停掉当前 dsh 进程后重新运行启动命令
 
 ### 可选：本地 ASR（离线识别）
-运行 `scripts/install-asr.ps1`（管理员）：自动下载 sherpa-onnx + SenseVoice 模型、注册
-`asr` 常驻服务（端口 18790，开机自启），设置页 ASR 模式选「本地常驻服务」。
+
+- **Windows**：管理员 PowerShell 运行 `scripts/install-asr.ps1`，自动下载
+  sherpa-onnx + SenseVoice 模型、注册 `asr` 常驻服务（端口 18790，开机自启）。
+- **Linux**：手动部署 sherpa-onnx 离线识别服务（监听 127.0.0.1:18790，
+  接口 `POST /transcribe {"audioPath":"..."}` / `GET /health`），或使用 ASR 的
+  cmd/api 模式。
+
+设置页 ASR 模式选「本地常驻服务」指向 18790 即可。
 
 ## 配置
 
@@ -83,52 +95,66 @@ ASR 模式都在设置页「语音服务」分区配置。
 2. PATH 探测（`where ffmpeg` / `which ffmpeg`）
 3. 兜底已知安装位置
 
-**安装**：Windows 执行 `winget install ffmpeg`（装完一般会自动加 PATH），
-或把 ffmpeg.exe 所在目录加入 PATH。装好后无需任何配置，插件自动探测；
-若装在特殊位置，设环境变量 `DSH_VOICE_FFMPEG_BIN=C:\路径\ffmpeg.exe` 即可。
+**安装**：Windows 执行 `winget install ffmpeg`（装完一般会自动加 PATH）；
+Linux（Debian/Ubuntu）执行 `sudo apt install ffmpeg`。装好后无需任何配置，插件自动探测；
+若装在特殊位置，设环境变量 `DSH_VOICE_FFMPEG_BIN=/路径/ffmpeg` 即可。
 
 > 没有 ffmpeg 时：本地 ASR（service/cmd 模式）和克隆样本的非 mp3/wav 格式转换会失败，
 > 但小米/edge 在线 TTS 不受影响。
-
-## 来源
-
-由 `dsh-composer-plugin`（client 工具条）与 `dsh-host-voice`（host 语音）合并重写而来，
-2026-08-21 统一为单包双入口。原 dsh-host-voice 的 git 历史备份在
-`plugins/_archive/dsh-voice-plugin-git-*.bundle`。
 
 ## 语音源码补丁（完整体验原生语音消息，可选）
 
 dsh 的 npm 安装版（0.1.0-rc.7）**契约不支持原生语音消息**（voice content、语音消息气泡、
 AI 语音回复条均为本地源码增强，官方源码/官方发布版默认都没有）。要用完整语音体验，
-**必须使用官方源码 + 本补丁**（推荐），或直接使用本项目 fork（oadank/deepseek-harness）。
+**二选一**：
 
-### 完整安装流程（小白照做）
+### 方案 A：官方源码 + 破解脚本（推荐，来源可信）
 
-1. **官方源码安装**（无 git 先装 git；Windows 建议装到 D:\opt 下）：
+1. **克隆官方源码**（任意目录，位置不限）：
    ```bash
    git clone https://github.com/deepseek-ai/deepseek-harness.git
    cd deepseek-harness
    git checkout 141eb6fef8        # 官方 dsh-0.1.0-rc.8 release 合并点
    ```
-2. **打语音补丁**（Windows 管理员 PowerShell，脚本会自动探测源码位置，
-   也可以在源码仓库根目录直接运行）：
+2. **打语音补丁**（Windows 管理员 PowerShell；脚本自动探测源码位置，
+   找不到时会提示你输入源码路径）：
    ```powershell
    # 插件 npm 安装后，补丁在本机位置：
    cd node_modules\@oadank\dsh-input-tools\patches
    powershell -ExecutionPolicy Bypass -File apply-voice-patch.ps1
    ```
-   脚本自动：探测/指定源码仓库 → 校验补丁可应用 → 备份未提交改动 → 应用 → 幂等（已打跳过）。
+   脚本自动：探测/输入源码仓库 → 校验补丁可应用 → 备份未提交改动 → 应用 → 幂等（已打跳过）。
 3. **构建并启动**：
    ```bash
    pnpm install
    pnpm run build:web            # 前端语音气泡渲染在此步生效
-   dsh --profile web             # 或注册 nssm 服务方式启动
+   dsh --profile web             # 或注册为系统服务（Windows 可用 nssm）
    ```
 4. **安装语音插件**：`dsh plugin --profile web add @oadank/dsh-input-tools`
-5. **可选：本地 ASR**：运行插件内 `scripts\install-asr.ps1`（管理员），
-   自动下载 sherpa-onnx + SenseVoice 模型、注册 `asr` 常驻服务（端口 18790）。
+5. **可选：本地 ASR**：见上文「可选：本地 ASR」。
 
-> 补丁/脚本已随 npm 包发布（`patches/` 目录），git 仓库同步维护。
-> 警告：补丁基于官方 rc.8（141eb6fef8）。官方 master 更新后补丁可能冲突，请 checkout 到该基线或等待补丁更新。回滚：git apply -R 或 git checkout -- 文件。勿在官方 master 上直接打补丁。
+### 方案 B：直接克隆改造版（自带语音，零脚本）
 
-**npm 版（rc.7）说明**：语音输入（录音→ASR→发送）可用；AI 语音可合成（音频生成）；但语音消息气泡/语音回复条受 rc.7 前端限制无法原生显示（插件 DOM 注入方案受 React 重渲染影响不稳定，已禁用）。完整体验请使用上面的源码版。
+改造版 fork 已内置全部语音改造（与方案 A 打补丁后的结果一致），跳过第 2 步：
+
+```bash
+git clone https://github.com/oadank/deepseek-harness.git
+cd deepseek-harness
+# 已是语音改造版，无需 checkout / 无需打补丁
+pnpm install
+pnpm run build:web
+dsh --profile web
+```
+
+之后同样执行「安装语音插件」和「可选：本地 ASR」。
+
+### 说明与限制
+
+- 补丁/脚本已随 npm 包发布（`patches/` 目录），git 仓库同步维护。
+- **补丁基线**：官方 commit `141eb6fef8`（dsh-0.1.0-rc.8 release 合并点）。
+  官方后续更新的 master 与本补丁可能不兼容，**请先 `git checkout 141eb6fef8` 再打补丁**；
+  若已应用过，重跑脚本会检测到并跳过（幂等）。
+  回滚：`git apply -R <patch>` 或 `git checkout -- <文件>`。
+- **npm 版（rc.7）说明**：语音输入（录音→ASR→发送）可用；AI 语音可合成（音频生成）；
+  但语音消息气泡/语音回复条受 rc.7 前端限制无法原生显示（插件 DOM 注入方案受 React
+  重渲染影响不稳定，已禁用）。完整体验请使用源码版（方案 A 或 B）。

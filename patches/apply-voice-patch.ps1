@@ -107,6 +107,6 @@ Write-Host "==== 完成 ====" -ForegroundColor Cyan
 Write-Host "后续步骤："
 Write-Host "  1. pnpm install"
 Write-Host "  2. pnpm run build:web     （构建前端，语音气泡渲染在此步生效）"
-Write-Host "  3. dsh --profile web      或 nssm 服务方式启动"
+Write-Host "  3. 启动 dsh：dsh --profile web（Windows 可注册为 nssm/systemd 服务）"
 Write-Host "  4. 安装语音插件：dsh plugin --profile web add @oadank/dsh-input-tools"
 Write-Host "回滚：git checkout -- <文件> 或 git apply -R $Patch"
