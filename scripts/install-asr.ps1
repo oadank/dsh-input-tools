@@ -61,14 +61,20 @@ New-Item -ItemType Directory -Force -Path "$InstallDir\tmp" | Out-Null
 # ---- 1b. 下载/解压工具函数（2026-08-21 增强：断点续传 + 完整性校验 + 损坏自动重试）----
 # 之前 XDN 实测：GitHub 大文件下载中断 → 只下了 42.7MB/230MB → tar 报 Truncated → 脚本抛错退出，
 # 用户只看到"跑到最后报错"毫无提示。现在 curl -C - 断点续传 + 解压后校验，损坏文件自动删除重下。
+# ⚠️ PowerShell 坑：$ErrorActionPreference=Stop 时 curl/tar 写 stderr（进度/警告）会抛 NativeCommandError
+# 中断脚本（0.3.5 实测踩中）。因此所有原生命令用 cmd /c 包装 + 2>nul 吞 stderr + 临时放宽 EAP，
+# 只依据 $LASTEXITCODE 判断成败。
 function Download-Resume {
   param([string]$Url, [string]$OutFile)
   for ($attempt = 1; $attempt -le 3; $attempt++) {
     Write-Host "  下载（第 $attempt 次尝试）: $Url" -ForegroundColor Yellow
-    # Windows 10+ 自带 curl.exe；-C - 断点续传；--retry 网络层重试
-    & curl.exe -L -C - --retry 3 --retry-delay 2 --connect-timeout 20 -o $OutFile $Url 2>$null
-    if ($LASTEXITCODE -eq 0) { return $true }
-    Write-Host "  下载中断（exit=$LASTEXITCODE），3 秒后重试..." -ForegroundColor Yellow
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    cmd /c "curl.exe -sL -C - --retry 3 --retry-delay 2 --connect-timeout 20 -o `"$OutFile`" `"$Url`" 2>nul"
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    if ($code -eq 0) { return $true }
+    Write-Host "  下载中断（exit=$code），3 秒后重试..." -ForegroundColor Yellow
     Start-Sleep -Seconds 3
   }
   return $false
@@ -77,10 +83,14 @@ function Expand-TarBz2 {
   param([string]$Archive, [string]$Dest, [int]$Strip = 0)
   $tmpDir = Join-Path $Dest ".extract-tmp"
   New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-  $tarArgs = @('-xjf', $Archive, '-C', $tmpDir)
-  if ($Strip -gt 0) { $tarArgs += "--strip-components=$Strip" }
-  tar @tarArgs 2>$null
-  if ($LASTEXITCODE -ne 0) {
+  $stripArgs = ""
+  if ($Strip -gt 0) { $stripArgs = "--strip-components=$Strip" }
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  cmd /c "tar -xjf `"$Archive`" -C `"$tmpDir`" $stripArgs 2>nul"
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = $prevEAP
+  if ($code -ne 0) {
     Write-Host "  解压失败：压缩包损坏或不完整（$Archive）" -ForegroundColor Red
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     Remove-Item -Force $Archive -ErrorAction SilentlyContinue
