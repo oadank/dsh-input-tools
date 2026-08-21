@@ -168,7 +168,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404); res.end();
   }
 });
-server.listen(PORT, () => console.log('[ASR] listening on ' + PORT));
+server.listen(PORT, '127.0.0.1', () => console.log('[ASR] listening on 127.0.0.1:' + PORT));
 "@
 # 服务脚本用 .cjs：插件包 package.json 声明了 "type":"module"，.js 会被当 ESM 解析导致 require 报错
 # （2026-08-21 XDN 实测：asr-service.js 抛 ReferenceError: require is not defined）
