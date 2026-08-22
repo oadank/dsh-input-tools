@@ -8,9 +8,9 @@
 #      node local-tts.mjs <文本> → stdout 输出 mp3 音频字节）
 #
 # 安装位置（2026-08-22 改）：默认装到**独立目录**，不装插件包目录——
-#   插件包（profile 副本或源码 internal-plugins）会随升级/重装被覆盖，
+#   插件包（npm 安装的 profile 副本）会随升级/重装被覆盖，
 #   模型放里面会丢。默认顺序：
-#     1) -InstallDir 参数显式指定（最高优先，可指定源码 internal-plugins 等任意位置）
+#     1) -InstallDir 参数显式指定（最高优先，可指定任意位置）
 #     2) 检测已有 sherpa-onnx（ASR 装过则复用同一份，省一次下载）：
 #        ~\.dsh\sherpa-onnx / C:\D\opt\sherpa-onnx / D:\opt\deepseek-harness\asr
 #     3) 以上都没有 → ~\.dsh\sherpa-onnx（dsh 数据目录，跨升级保留）

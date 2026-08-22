@@ -7,7 +7,7 @@
 #   4. 注册 nssm 服务 asr（端口 18790，开机自启）
 #
 # 安装位置（2026-08-22 改）：默认装到**独立目录**，不装插件包目录——
-#   插件包（profile 副本或源码 internal-plugins）会随升级/重装被覆盖，
+#   插件包（npm 安装的 profile 副本）会随升级/重装被覆盖，
 #   模型放里面会丢。默认顺序：
 #     1) -InstallDir 参数显式指定（最高优先）
 #     2) 检测已有 sherpa-onnx（之前装过则复用）：~\.dsh\sherpa-onnx / C:\D\opt\sherpa-onnx / D:\opt\deepseek-harness\asr
