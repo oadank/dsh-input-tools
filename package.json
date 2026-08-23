@@ -1,6 +1,6 @@
 {
   "name": "@oadank/dsh-input-tools",
-  "version": "0.3.19",
+  "version": "0.3.21",
   "private": false,
   "type": "module",
   "main": "lib/index.js",
@@ -9,8 +9,12 @@
     "url": "https://github.com/oadank/dsh-input-tools.git"
   },
   "exports": {
-    ".": { "default": "./lib/index.js" },
-    "./client": { "default": "./lib/client.js" },
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # dsh-input-tools 本地 TTS 一键安装脚本（Windows）
 # 安装内容：
 #   1. sherpa-onnx（含 sherpa-onnx-offline-tts.exe 离线 TTS）
@@ -29,23 +29,43 @@ $Version = "v1.13.6"
 # ---- 下载/解压工具函数（2026-08-21 增强：断点续传 + 完整性校验 + 损坏自动重试）----
 # ⚠️ PowerShell 坑：$ErrorActionPreference=Stop 时 curl/tar 写 stderr 会抛 NativeCommandError（0.3.5 实测踩中）。
 # 原生命令一律 cmd /c 包装 + 2>nul + 临时放宽 EAP，只依据 $LASTEXITCODE。
+# [BUG-3 修复 2026-08-23]：①curl 加 -f（HTTP 错误即非零退出）；②弱网 exit 56 不再误判成功；
+#   ③解压前 tar -tjf 探完整性，失败删重下；④重试 3→5 次。
 function Download-Resume {
   param([string]$Url, [string]$OutFile)
-  for ($attempt = 1; $attempt -le 3; $attempt++) {
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
     Write-Host "  下载（第 $attempt 次尝试）: $Url" -ForegroundColor Yellow
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    cmd /c "curl.exe -sL -C - --retry 3 --retry-delay 2 --connect-timeout 20 -o `"$OutFile`" `"$Url`" 2>nul"
+    $errOut = cmd /c "curl.exe -fL -C - --retry 3 --retry-delay 2 --connect-timeout 20 -o `"$OutFile`" `"$Url`" 2>&1"
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($code -eq 0) { return $true }
-    Write-Host "  下载中断（exit=$code），3 秒后重试..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 3
+    if ($code -eq 33) {
+      if (Test-Path $OutFile) {
+        $prevEAP2 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        cmd /c "tar -tjf `"$OutFile`" 2>nul" | Out-Null
+        $probe = $LASTEXITCODE; $ErrorActionPreference = $prevEAP2
+        if ($probe -eq 0) { return $true }
+      }
+    }
+    Write-Host "  下载中断（exit=$code，$($errOut | Select-Object -Last 1)），5 秒后重试..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
   }
   return $false
 }
 function Expand-TarBz2 {
   param([string]$Archive, [string]$Dest, [int]$Strip = 0)
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  cmd /c "tar -tjf `"$Archive`" 2>nul" | Out-Null
+  $probe = $LASTEXITCODE
+  $ErrorActionPreference = $prevEAP
+  if ($probe -ne 0) {
+    Write-Host "  压缩包不完整（tar 探目录失败）：$Archive" -ForegroundColor Red
+    Remove-Item -Force $Archive -ErrorAction SilentlyContinue
+    return $false
+  }
   $tmpDir = Join-Path $Dest ".extract-tmp"
   New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
   $stripArgs = ""
@@ -170,26 +190,32 @@ if (-not (Test-Path "$modelDir\model.onnx")) {
 # ---- 5. 写 local-tts.mjs 启动脚本（契约：node local-tts.mjs <文本> → stdout 输出 mp3）----
 # 注意：JS 里含反引号模板字符串，必须用单引号 here-string（@'...'@）字面生成，再替换路径占位符
 Write-Host "`n写入 local-tts.mjs 启动脚本..." -ForegroundColor Yellow
-$exePath = "$InstallDir\bin\sherpa-onnx-offline-tts.exe".Replace('\', '/')
-$basePath = "$InstallDir\models\melo".Replace('\', '/')
 $launcherTemplate = @'
 // local-tts.mjs — 本地 MeloTTS（sherpa-onnx VITS 中文模型）TTS 包装
 // 契约（配合 dsh-input-tools 的"本地命令"）：文本作末参，stdout 输出音频字节（mp3）。
 // 本文件由 install-local-tts.ps1 自动生成，勿手改；重装会重新生成。
+// [中文路径修复] sherpa-onnx 用 ANSI/GBK 解析参数，绝对路径含中文变乱码——chdir 后全用相对路径
 import { execFileSync } from 'node:child_process'
-import { readFileSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, unlinkSync, mkdirSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const SHERPA = '__SHERPA__'
-const BASE = '__BASE__'
+const HERE = dirname(fileURLToPath(import.meta.url))
+try { process.chdir(HERE) } catch (e) { console.error('local-tts: chdir 失败: ' + e.message); process.exit(1) }
+const SHERPA = 'bin/sherpa-onnx-offline-tts.exe'
+const BASE = 'models/melo'
 const text = process.argv.slice(2).join(' ')
 if (!text) {
   console.error('local-tts: 缺少文本参数')
   process.exit(1)
 }
-const tmp = join(process.env.TEMP ?? '/tmp', `dsh-local-tts-${process.pid}-${Date.now()}`)
-const wav = `${tmp}.wav`
-const mp3 = `${tmp}.mp3`
+// [BUG-9 修复] TEMP 可能含中文/无效——sherpa 写绝对路径会乱码，一律用**相对路径** tmp/ 子目录
+// （chdir 后相对路径是 ASCII，绝对安全）。不依赖 process.env.TEMP。
+const tmpDir = 'tmp'
+mkdirSync(tmpDir, { recursive: true })
+const stamp = `${process.pid}-${Date.now()}`
+const wav = `${tmpDir}/dsh-local-tts-${stamp}.wav`
+const mp3 = `${tmpDir}/dsh-local-tts-${stamp}.mp3`
 try {
   execFileSync(SHERPA, [
     '--vits-model=' + BASE + '/model.onnx',
@@ -199,20 +225,28 @@ try {
     '--vits-length-scale=1.0',
     '--output-filename=' + wav,
     text,
-  ], { windowsHide: true, stdio: 'ignore', timeout: 120_000 })
+  ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 })
   // 本地合成音量偏小：ffmpeg 放大 4 倍并转 mp3
   execFileSync('ffmpeg', ['-y', '-i', wav, '-af', 'volume=4.0', '-c:a', 'libmp3lame', '-b:a', '128k', mp3], {
-    windowsHide: true, stdio: 'ignore', timeout: 60_000,
+    windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000,
   })
   process.stdout.write(readFileSync(mp3))
+} catch (e) {
+  // [诊断增强] stderr 前 200 字符带出来，之前 stdio:'ignore' 失败完全无信息
+  const detail = (e && e.stderr ? String(e.stderr).slice(0, 200) : '') || String(e && e.message || e)
+  console.error('local-tts: ' + detail)
+  process.exit(1)
 } finally {
   try { unlinkSync(wav) } catch { /* 忽略 */ }
   try { unlinkSync(mp3) } catch { /* 忽略 */ }
 }
 '@
-$launcher = $launcherTemplate.Replace('__SHERPA__', $exePath).Replace('__BASE__', $basePath)
+# 注意：上模板里 chdir 到 HERE（= 脚本所在目录=安装目录），因此占位符不需要绝对路径，全部相对。
+$launcher = $launcherTemplate
 $launcherFile = Join-Path $InstallDir "local-tts.mjs"
-Set-Content -Path $launcherFile -Value $launcher -Encoding UTF8
+# [中文路径修复] .mjs 按 UTF-8 读，不加 BOM；PS 5.1 Set-Content UTF8 带 BOM，node 对 .mjs BOM 会报
+# "Unexpected token"——必须无 BOM 写（.NET UTF8Encoding(false)）。
+[System.IO.File]::WriteAllText($launcherFile, $launcher, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "  local-tts.mjs: $launcherFile" -ForegroundColor Green
 
 # ---- 6. 完成提示（命令只在路径含空格时才加引号；插件已能正确处理引号）----

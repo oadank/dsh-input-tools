@@ -1,0 +1,9 @@
+# [2026-08-23] PowerShell 5.1 按 ANSI/GBK 读无 BOM 的 .ps1 → 中文乱码 ParseError。
+# .ps1 必须保留 UTF-8 BOM。git 默认不会剥离 BOM，显式声明防止 eol 重写对它做手脚。
+*.ps1 text eol=lf
+*.ps1 -filter
+
+# node 脚本按 UTF-8 读，不要 BOM（.mjs/.cjs 带 BOM 会报错），保持 LF
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.js text eol=lf

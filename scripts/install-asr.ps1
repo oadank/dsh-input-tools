@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # dsh-host-voice ASR 一键安装脚本（Windows）
 # 安装内容：
 #   1. sherpa-onnx（含 sherpa-onnx-offline.exe 非流式识别）
@@ -71,23 +71,47 @@ New-Item -ItemType Directory -Force -Path "$InstallDir\tmp" | Out-Null
 # ⚠️ PowerShell 坑：$ErrorActionPreference=Stop 时 curl/tar 写 stderr（进度/警告）会抛 NativeCommandError
 # 中断脚本（0.3.5 实测踩中）。因此所有原生命令用 cmd /c 包装 + 2>nul 吞 stderr + 临时放宽 EAP，
 # 只依据 $LASTEXITCODE 判断成败。
+# [BUG-3 修复 2026-08-23]：①curl 加 -f（HTTP 错误即非零退出），去掉 -s 的双重静默保留可诊断输出进变量；
+#   ②弱网 exit 56 时不再误判（$LASTEXITCODE 为准，-s 时 curl 也可能 0）；③解压前先 tar -tjf 探完整性，
+#   探目录成功才算完整，失败删除重下；④重试 3→5 次。
 function Download-Resume {
   param([string]$Url, [string]$OutFile)
-  for ($attempt = 1; $attempt -le 3; $attempt++) {
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
     Write-Host "  下载（第 $attempt 次尝试）: $Url" -ForegroundColor Yellow
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    cmd /c "curl.exe -sL -C - --retry 3 --retry-delay 2 --connect-timeout 20 -o `"$OutFile`" `"$Url`" 2>nul"
+    # 不用 -s：错误信息保留（但要吞 stderr 防止 NativeCommandError，用 2>&1 捕获到变量）
+    $errOut = cmd /c "curl.exe -fL -C - --retry 3 --retry-delay 2 --connect-timeout 20 -o `"$OutFile`" `"$Url`" 2>&1"
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($code -eq 0) { return $true }
-    Write-Host "  下载中断（exit=$code），3 秒后重试..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 3
+    if ($code -eq 33) {
+      # curl 33 = 服务器不支持续传，可能文件已完整（200 全量下载过）——校验一下
+      if (Test-Path $OutFile) {
+        $prevEAP2 = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        cmd /c "tar -tjf `"$OutFile`" 2>nul" | Out-Null
+        $probe = $LASTEXITCODE; $ErrorActionPreference = $prevEAP2
+        if ($probe -eq 0) { return $true }
+      }
+    }
+    Write-Host "  下载中断（exit=$code，$($errOut | Select-Object -Last 1)），5 秒后重试..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
   }
   return $false
 }
 function Expand-TarBz2 {
   param([string]$Archive, [string]$Dest, [int]$Strip = 0)
+  # [BUG-3 修复] 解压前先探完整性：tar -tjf 能列出目录才算完整，避免"下载中断但被当成功 → 解压必败"
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  cmd /c "tar -tjf `"$Archive`" 2>nul" | Out-Null
+  $probe = $LASTEXITCODE
+  $ErrorActionPreference = $prevEAP
+  if ($probe -ne 0) {
+    Write-Host "  压缩包不完整（tar 探目录失败）：$Archive" -ForegroundColor Red
+    Remove-Item -Force $Archive -ErrorAction SilentlyContinue
+    return $false
+  }
   $tmpDir = Join-Path $Dest ".extract-tmp"
   New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
   $stripArgs = ""
@@ -181,21 +205,30 @@ if (-not (Test-Path "$modelDir\model.int8.onnx")) {
 
 # ---- 5. 写 ASR 服务脚本 ----
 Write-Host "`n[4/4] 写入 ASR 服务并注册 nssm..." -ForegroundColor Yellow
-# 路径统一用正斜杠，避免 JS 字符串把 \s \b 当转义符
-$exePath = "$InstallDir\bin\sherpa-onnx-offline.exe".Replace('\', '/')
-$modelPath = "$InstallDir\models\sensevoice-int8".Replace('\', '/')
+# ⚠️ 中文用户名路径（C:\Users\阿丹）P0 修复：sherpa-onnx 用 ANSI/GBK 解析命令行参数，
+# 绝对路径含中文会变乱码（status=4294967295）。铁律——**进程先 chdir 到安装目录，所有参数用相对路径**；
+# 输入音频若在中文路径，先 copyFileSync 到 tmp/（ASCII 相对路径）再调用 sherpa。
 $serviceScript = @"
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
-const { existsSync } = require('node:fs');
+const { existsSync, copyFileSync, unlinkSync, mkdirSync } = require('node:fs');
+const { join } = require('node:path');
 const PORT = Number(process.env.ASR_SERVICE_PORT || $Port);
-const SHERPA_BIN = process.env.ASR_SHARPA_BIN || '$exePath';
-const MODEL_DIR = process.env.ASR_MODEL_DIR || '$modelPath';
+// [中文路径修复] 常量只存相对位置，进程 chdir 后使用；不把绝对路径传给 sherpa
+const SHERPA_REL = 'bin/sherpa-onnx-offline.exe';
+const MODEL_DIR_REL = 'models/sensevoice-int8';
+const TMP_REL = 'tmp';
+let ROOT = process.env.ASR_ROOT || process.cwd();
+if (!existsSync(ROOT)) ROOT = process.cwd();
+try { process.chdir(ROOT); } catch (e) { console.error('[ASR] chdir 失败: ' + e.message); }
+const SHERPA = SHERPA_REL;
+const MODEL_DIR = MODEL_DIR_REL;
 const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/transcribe') {
     let body = '';
     req.on('data', c => body += c);
     req.on('end', async () => {
+      let tmpAudio = null;
       try {
         const { audioPath } = JSON.parse(body);
         if (!audioPath || !existsSync(audioPath)) {
@@ -203,15 +236,21 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify({ error: 'invalid audio path' }));
           return;
         }
-        const r = spawnSync(SHERPA_BIN, [
+        // [中文路径修复] 输入音频可能位于中文路径——拷贝到 ASCII 相对 tmp/ 再调用
+        mkdirSync(join(ROOT, TMP_REL), { recursive: true });
+        tmpAudio = TMP_REL + '/asr-in-' + process.pid + '-' + Date.now() + '.wav';
+        copyFileSync(audioPath, join(ROOT, tmpAudio));
+        const r = spawnSync(SHERPA, [
           '--tokens=' + MODEL_DIR + '/tokens.txt',
           '--sense-voice-model=' + MODEL_DIR + '/model.int8.onnx',
-          '--num-threads=4', audioPath,
+          '--num-threads=4', tmpAudio,
         ], { windowsHide: true, timeout: 30000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
         const all = (r.stdout || '') + '\n' + (r.stderr || '');
         if (r.status !== 0) {
+          // [诊断增强] stderr 前 200 字符带进响应，设置页可直接看到原因（之前全吞）
+          const head = (r.stderr || '').slice(0, 200);
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'sherpa exit ' + r.status }));
+          res.end(JSON.stringify({ error: 'sherpa exit ' + r.status, detail: head }));
           return;
         }
         const m = all.match(/"text"\s*:\s*"([^"]*)"/);
@@ -221,6 +260,8 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: String(err && err.message || err) }));
+      } finally {
+        if (tmpAudio) { try { unlinkSync(join(ROOT, tmpAudio)); } catch (_) { /* 清理失败忽略 */ } }
       }
     });
   } else if (req.method === 'GET' && req.url === '/health') {
@@ -235,7 +276,11 @@ server.listen(PORT, '127.0.0.1', () => console.log('[ASR] listening on 127.0.0.1
 # 服务脚本用 .cjs：插件包 package.json 声明了 "type":"module"，.js 会被当 ESM 解析导致 require 报错
 # （2026-08-21 XDN 实测：asr-service.js 抛 ReferenceError: require is not defined）
 $serviceFile = "$InstallDir\asr-service.cjs"
-Set-Content -Path $serviceFile -Value $serviceScript -Encoding UTF8
+# [中文路径修复] BOM 不要加（node 按 UTF-8 读 .cjs，BOM 会报错）；PowerShell 5.1 写 UTF8 时带 BOM，
+# 用 UTF8 参数即可（PS5.1 的 UTF8 是带 BOM 的 UTF-8，node 对 .cjs BOM 容忍，但保险起见用无 BOM 写入）。
+# PS 5.1 没有 -Encoding utf8NoBOM，用 .NET 写：
+[System.IO.File]::WriteAllText($serviceFile, $serviceScript, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "  ASR 服务脚本: $serviceFile" -ForegroundColor Green
 
 # ---- 6. 注册 nssm 服务 ----
 $nssm = Get-Command nssm -ErrorAction SilentlyContinue
@@ -244,11 +289,19 @@ if (-not $nssm) {
   exit 1
 }
 $nodeExe = (Get-Command node).Source
-nssm stop asr 2>$null | Out-Null
-nssm remove asr confirm 2>$null | Out-Null
+# [BUG-6 修复] nssm stop/remove 在服务不存在时写 stderr，EAP=Stop 下抛 NativeCommandError 中断脚本，
+# 首次安装必崩（实测卡在 [4/4]）。先检测存在再操作，并临时放宽 EAP 用 $LASTEXITCODE 判成败。
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+if (Get-Service asr -ErrorAction SilentlyContinue) {
+  nssm stop asr 2>$null | Out-Null
+  nssm remove asr confirm 2>$null | Out-Null
+}
+$ErrorActionPreference = $prevEAP
 nssm install asr "$nodeExe" "$serviceFile" | Out-Null
 nssm set asr AppDirectory "$InstallDir" | Out-Null
-nssm set asr AppEnvironmentExtra "ASR_SERVICE_PORT=$Port" | Out-Null
+# [中文路径修复] ASR_ROOT 让服务进程知道安装根目录（nssm cwd 可能不是 InstallDir），chdir 用
+nssm set asr AppEnvironmentExtra "ASR_SERVICE_PORT=$Port" "ASR_ROOT=$InstallDir" | Out-Null
 nssm set asr Start SERVICE_AUTO_START | Out-Null
 nssm set asr AppStdout "$InstallDir\asr-stdout.log" | Out-Null
 nssm set asr AppStderr "$InstallDir\asr-stderr.log" | Out-Null
