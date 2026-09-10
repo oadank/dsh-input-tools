@@ -31,9 +31,7 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime"
-      ],
+      "inject": [],
       "platform": "web"
     }
   },
@@ -44,5 +42,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "DSH 语音能力一体化插件（bundle 单包双入口）：host=语音工具/TTS六引擎/ASR/克隆/自动回复；client=输入框工具条/语音设置页/复制按钮。dsh plugin --profile web add @oadank/dsh-input-tools 一键安装注册"
+  "description": "DSH 语音+文件宿主一体化插件：host=语音/TTS/ASR/克隆/自动回复 + 全局人设 + MCP 动态管理 + Skill 管理 + /vscode-files 文件 API；client=工具条/语音设置/复制按钮。0.1.5 已吸收 @anoslide/dsh-host-files。"
 }
