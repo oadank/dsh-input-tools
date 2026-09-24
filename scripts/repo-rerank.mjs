@@ -25,7 +25,10 @@ if (task === '') {
 const flag = (name, def) => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : def }
 const repoRoot = flag('repo', process.cwd())
 const topN = Number(flag('top', 20))
-const batchSize = Math.max(1, Math.min(16, Number(flag('batch', 16)))) // 官方建议单次 ≤16 题，延迟随题数近线性
+// [2026-09-25 实测] 默认**一次只问一个文件**。官方虽建议单次 ≤16 题，但实测同一批文件塞 16 题时判定会糊：
+//   榜首变成一张设置页截图 0.99、真正要改的源码没进前 8；拆成单题则 vision-test.jpg 掉到 0.13、源码排前。
+//   68 个文件并发 4 路单题 ≈ 2.6s，够快。想赌批量省时间再 --batch 8/16。
+const batchSize = Math.max(1, Math.min(16, Number(flag('batch', 1))))
 const outPath = flag('out', join(repoRoot, '.rerank.json'))
 const keepAll = argv.includes('--all')   // --all = 连"无关"也写进结果文件（默认只留 ≥1 分的）
 
@@ -91,8 +94,17 @@ const INSTRUCTIONS = 'You rank repository files by how relevant each path is to 
   ' even when the repo is about that feature. When unsure, judge lower. Never spread a whole batch across the middle: that is not a ranking.'
 const LEVELS = ['irrelevant', 'slightly related', 'fairly related', 'must read']
 
+// [2026-09-25 四种构造对照实测后定稿] 问"相关度"（score）必翻车：模型把"值得看"和"要动手改"混成一锅，
+//   实测 README.md 0.97 / 设置页截图 0.69 压过 lib/index.js 0.32，且加"截图一律判无关"这类引导句只会更糟
+//   （题面措辞过敏，已在闸门、漂移、排序三件事上各翻一次车）。
+//   唯一顺序正确的是 noul 直问"这文件是不是**必须改**才能完成任务"：index 0.78 > client 0.76 > README 0.72
+//   > 截图 0.69 > 无关 jpg 0.56。分差小（0.2 量级），所以这只配当"缩小范围"，不配当结论。
+const MODE = String(flag('mode', 'noul')).toLowerCase()
 function gradeOne(path) {
-  return { type: 'score', instructions: `How relevant is this file path to the task: ${path}`, criteria: LEVELS }
+  if (MODE === 'score') return { type: 'score', instructions: `How relevant is this file path to the task: ${path}`, criteria: LEVELS }
+  // ⚠ 路径必须写进题面：state 在一次请求里是全批共享的，只放任务不放路径，模型不知道在判哪个文件，
+  //   实测 65 个文件齐刷刷吐出同一个先验常数 0.83（2026-09-25 我自己踩的坑，别照抄）。
+  return { type: 'noul', instructions: `Path: ${path} — this file must be EDITED (changed) in order to implement the task; not merely opened for reference, and not a screenshot, image, document, manifest, lock file or test helper` }
 }
 
 async function askBatch(c, paths) {
@@ -111,8 +123,23 @@ async function askBatch(c, paths) {
   const t = await r.text().catch(() => '')
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${t.slice(0, 160)}`)
   const j = JSON.parse(t)
-  return paths.map((p, i) => ({ path: p, score: Number(j?.answers?.['f' + i]?.score ?? 0), probs: j?.answers?.['f' + i]?.probabilities ?? null }))
+  return paths.map((p, i) => {
+    const a = j?.answers?.['f' + i] ?? null
+    const v = MODE === 'score' ? Number(a?.score ?? 0) : Number(a?.noul ?? 0) // noul 0~1 / score 0~3，同用 score 字段承载
+    return { path: p, score: Number.isFinite(v) ? v : 0, probs: a?.probabilities ?? null }
+  })
 }
+
+// [2026-09-25 三种构造三次失败，判定为不可用] 保留代码是为了留住测量数据，不是为了让你用：
+//   ① score + 中文题面 → 68 文件全挤 1.06~1.73，源码与一张 jpg 只差 0.04（压扁）
+//   ② score + 英文题面加"截图判无关"引导 → README 0.97 居首、lib/index.js 0.32 垫底（错序，引导句反噬）
+//   ③ noul + 路径写进题面 → 全仓库齐刷 0.94~0.95，头名差 0.01（饱和，排序等同掷骰子）
+//   结论：判断模型能干的活是"这句要不要改写"这类**单点是非/分档**（闸门已实测 0 误杀），
+//   不是"上百个候选互相比较"。要排序请交给向量检索或现成搜索引擎，别再拿它赌。
+const VERDICT = '⚠ 本脚本已被实测判定为不可用（压扁/错序/饱和三种失败各复现一次，详见文件头注释）。\n' +
+  '  判断模型擅长单点是非与分档，不擅长上百候选互比。真要文件排序请用向量检索。\n' +
+  '  仍然要跑一遍看数据，加 --yes。'
+if (!argv.includes('--yes')) { console.error(VERDICT); process.exit(4) }
 
 const c = creds()
 if (!c.key) { console.error('拿不到网关 key（env DECISION_KEY / LITELLM_API_KEY / HKCU OPENAI_API_KEY 都为空），退出'); process.exit(3) }
