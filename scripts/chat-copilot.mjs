@@ -90,31 +90,54 @@ function toMessages(raw) {
   return out.slice(-20)
 }
 
-/** 5) 🔴 填入：写剪贴板 → 聚焦输入框（只点给定坐标或 UIA 找到的 Edit）→ Ctrl+V。**绝不回车**。 */
+/** 5) 🔴 填入 + 强制回读自证。**绝不回车、绝不点"发送"**。
+ * 上一轮我把"剪贴板写成功"当成"填入成功"报了你一个假的 ✓ —— 输入框区域单独 OCR 出来只有占位符。
+ * 这版按 win-desktop-helper 服务自己给的配方重写（它在 ui_set 读回不一致时把正确姿势直接打在错误里）：
+ *   主路 /ui/set?i=（写入即自动读回校验，实测 MiMo 的 Electron 输入框 ok+verified:true）
+ *   备路 clipboard/set → ui/click 聚焦 → ctrl+v → 用 ui/read 按 i 回读比对**
+ * 两条路都必须拿到"输入框当前值 == 候选文本"才算成功，否则如实报失败。 */
 async function fill(w, text) {
-  const s = await get('/clipboard/set?keep_cr=1&text=' + encodeURIComponent(text))
-  if (!s.ok) throw new Error('写剪贴板失败: ' + JSON.stringify(s).slice(0, 120))
-  const back = await get('/clipboard/get')
-  if (String(back.text).trim() !== text.trim()) throw new Error('剪贴板回读不一致，放弃填入（不做半截操作）')
-  let pt = flag('click', '')
-  if (!pt) {
-    const u = await get('/ui/find?title=' + encodeURIComponent(w.title) + '&type=Edit')
-    const e = Array.isArray(u?.elements) ? u.elements[0] : null
-    if (e?.rect) pt = Math.round(e.rect.x + e.rect.w / 2) + ',' + Math.round(e.rect.y + e.rect.h / 2)
-    else { console.log('✗ 没定位到输入框（UIA 里没有 Edit 控件）。我不会瞎点。加 --click x,y 指定输入框中心坐标再试。'); return false }
+  const norm = (s) => String(s ?? '').replace(/\s+/g, '').trim()
+  const want = norm(text)
+  // 🔴 空文本一律拒绝操作：否则「期望空 == 读到空」会被判成填入成功（上一轮真就这么打印了「✓…（0 字）」）。
+  if (!want) { console.log('✗ 没有可填入的候选文本（大脑没出候选，或 --pick 越界）。不做任何操作，也不清空你现有的输入框。'); return false }
+  const u = await get('/ui/find?title=' + encodeURIComponent(w.title) + '&type=Edit')
+  const e = Array.isArray(u?.elements) ? u.elements.find((x) => Number.isFinite(x.i)) : null
+  if (!e) { console.log('✗ UIA 里找不到 Edit 输入框。我不会瞎点坐标（点错窗口比不填更糟）。给我 --click x,y 或直接手动复制。'); return false }
+  console.log(`  输入框: i=${e.i} name=「${String(e.name).slice(0, 18)}」 rect=${e.rect?.x},${e.rect?.y} ${e.rect?.w}x${e.rect?.h}`)
+  // 主路：UIA 直接写值（服务内部自带读回校验）
+  const st = await get(`/ui/set?title=${encodeURIComponent(w.title)}&i=${e.i}&value=${encodeURIComponent(text)}`)
+  if (st?.ok && st.verified) {
+    const rd = await get(`/ui/read?title=${encodeURIComponent(w.title)}&i=${e.i}`)
+    if (norm(rd?.value) === want) { console.log(`✓ 已填入并经 UIA 读回证实（${st.len} 字）：「${String(rd.value).slice(0, 40)}」`); console.log('  发送由你按回车，本工具永不代发。'); return true }
+    console.log(`✗ ui_set 说成功但读回不对（读到「${String(rd?.value).slice(0, 40)}」）—— 转粘贴备路`)
+  } else if (st?.error) {
+    console.log('  ui_set 不可用：' + String(st.error).slice(0, 110) + ' → 转粘贴备路')
   }
-  const [x, y] = pt.split(',').map(Number)
-  console.log(`  点输入框 (${x},${y}) → 粘贴（不发送）`)
-  await get(`/mouse?action=click&x=${x}&y=${y}`)
+  // 备路：剪贴板 + 聚焦点击 + ctrl+v + 读回比对
+  const cb = await get('/clipboard/set?keep_cr=1&text=' + encodeURIComponent(text))
+  if (!cb?.ok) { console.log('✗ 写剪贴板失败：' + JSON.stringify(cb).slice(0, 120)); return false }
+  const ck = await get(`/ui/click?title=${encodeURIComponent(w.title)}&i=${e.i}`)
+  if (!ck?.ok) { console.log('✗ 聚焦点击失败：' + JSON.stringify(ck).slice(0, 120)); return false }
   await new Promise((r) => setTimeout(r, 250))
   await get('/keyboard/press?keys=ctrl+v')
-  console.log('✓ 已填入输入框。发送请你自己按回车 —— 本工具永不代发。')
-  return true
+  await new Promise((r) => setTimeout(r, 350))
+  const rd2 = await get(`/ui/read?title=${encodeURIComponent(w.title)}&i=${e.i}`)
+  const got = rd2?.value
+  if (norm(got) === want) { console.log(`✓ 已粘贴并经 UIA 读回证实：「${String(got).slice(0, 40)}」`); console.log('  发送由你按回车，本工具永不代发。'); return true }
+  console.log(`✗ 粘贴后读回不符（期望 ${want.length} 字，读到「${String(got).slice(0, 40)}」）→ 判为**未填入**，文字仍在剪贴板里，可手动 Ctrl+V`)
+  return false
 }
 
 // ── 主流程 ──
 const w = await findWindow()
-if (has('activate')) await get('/win/manage?hwnd=' + w.hwnd + '&verb=activate')
+// 采集前先把它带到前台：它截图是 GDI CopyFromScreen（遮挡部分拍不到），窗口=模式判黑还会退化成拷屏。
+// 端点是 /win/activate?hwnd=（我上一轮写的 /win/manage?verb=activate 是猜的，服务回 "unknown verb"）。
+if (!has('no-activate') && w.hwnd) {
+  const ac = await get('/win/activate?hwnd=' + w.hwnd)
+  if (!ac?.ok) console.log('⚠ 激活失败（' + String(ac?.error || JSON.stringify(ac)).slice(0, 80) + '），继续截，但被挡住的部分拍不到')
+  else await new Promise((r) => setTimeout(r, 350))
+}
 const png = await grab(w)
 const raw = await readPng(png)
 if (has('dump')) { console.log('\n─── OCR 原文 ───\n' + raw) }
