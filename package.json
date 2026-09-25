@@ -31,7 +31,11 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "inject": [],
+      "inject": [
+        "slots",
+        "uiConversation",
+        "documentPreviews"
+      ],
       "platform": "web"
     }
   },
