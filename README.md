@@ -123,10 +123,10 @@ dsh --profile web
 
 setup 脚本自动完成：装插件进 profile → 注册 → 检查 ffmpeg → 提示可选 ASR。**无需再执行 dsh plugin add**。
 
-### 可选：本地 ASR（离线识别）
+### 本地 ASR（语音转文字）
 
-- **Windows**：管理员 PowerShell 运行 `scripts\install-asr.ps1`（插件包内），自动下载 sherpa-onnx + 模型（约 260MB）、注册 `asr` 服务（18790）
-- **Linux**：手动部署 18790 识别服务，或用 ASR 的 cmd/api 模式
+- **默认走官方内置（official 模式）**：dsh 客户端自带 SenseVoice 识别（`@deepseek-ai/dsh-experimental-voice-input-bundle`，运行时在 app.asar 内、模型在 `~\.dsh\speech-to-text\`，首次使用自动准备）——**零安装、零后台服务**，设置页选「官方内置」或点「检测语音识别」自动切换。
+- 历史兼容：`本地常驻服务(18790)`/`本地命令` 两种旧模式仍可配置（第二套 sherpa 部署已退役，不再提供一键安装脚本）；也可用在线 API 模式。
 
 ### 依赖
 
