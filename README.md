@@ -25,26 +25,22 @@
 - 识图后端在设置页「图片识别」独立分区配置：**本地部署**（ollama / sglang / vllm 等 OpenAI 兼容 `/v1` 端点，无需 Key）或**在线云端 API**（填地址 + API Key），统一 OpenAI 兼容格式
 - 设置页可一键测试配置连通（内置测试图 + 三模式试跑）、查看/编辑每个模式的提示词（支持恢复默认）
 
-## 架构说明：图片/语音为什么需要改 dsh 源码
+## 架构说明：哪些还需要改 dsh 源码（2026-09-26 全面复核，逐条核对代码）
 
-官方 dsh 对图片只有一个态度：**当前模型支持看图就把图发过去（data-URL），不支持就报错**。
-纯文本模型（如 deepseek-v4-flash）在官方 dsh 上**根本没法用图**——不是缺识图工具，而是图片块进不了模型。
+> 🔴 **本节曾长期失实**：旧版写着"改 `llm-deepseek/serialize.ts`、`llm-pi-ai/context.ts`、`apiproxy/api-proxy.ts`"——经 `git diff dsh-v0.1.7-rc.2` 逐文件核对，**这三处在当前基线（官方 0.1.7-rc.2）已全部不存在**：官方原生了附件/图片管线（`attachment` + `llm-deepseek/files-api`），apiproxy 包整体退役。纯文本模型发图现走**插件零改动链路**：图片转本地附件路径文本 → AI 调 `look_image` 识图。
 
-两条路线：
+当前仍依赖 fork 源码的改动只剩**语音消息一簇**（官方无对应扩展点，进官方插件库前需上游化或找钩子）：
 
-**A. 不改源码（modlens 等外置插件的做法）**
-图片在"粘贴进输入框"那一刻被拦截：图片字节存临时目录，输入框里放**路径文本**，消息里没有图片块，官方序列化永远不碰图片 → 文本模型也能用工具看图。
-代价：① 只覆盖「粘贴」一个入口（普通发图、语音带图、历史消息里的图都管不到）；② 聊天里不是标准图片消息（没有官方缩略图/点击放大/附件管理）。
+| 官方文件 | 改动 | 为什么暂时去不掉 |
+|---|---|---|
+| `core/session`（types + known-event-types） | `voice/reply`、`image/reply`、`video/reply` 三个 log-only 事件类型 | 事件白名单在 core，插件写入媒体事件目前必须经它 |
+| `llm/llm/src/types.ts` + `content.ts`、`attachment` types/index | `VoiceBlock` 内容块类型 | 语音内容块的类型系统引用链 |
+| `session/session-format-v2-to-v3/payload.ts` | voice 块迁移支持 | 同上迁移面 |
+| `ui-chat` 包内新增（VoiceCard 等）+ 十余处小接线 | 语音气泡/图片条渲染 | **可迁插件**（视频条已在插件 client.js 用 `uiConversation.events.register` 纯插件渲染，语音照此办理即可归还）——待专项 |
 
-**B. 改源码（本 fork 的做法）**
-- `llm-deepseek/serialize.ts` + `llm-pi-ai/context.ts`：图片块统一转成「本地附件路径文本」，模型拿到路径后用本插件的 `look_image` 识图——**任何入口**的图（发图 / 语音带图 / 历史回放 / 含图会话切换模型）全覆盖；
-- `apiproxy/api-proxy.ts`：移除官方「模型不支持图片就拒绝切换」的闸门。
+另有五处**与媒体无关的通用健壮性补丁**（tailnet 域名信任、PWA 切后台重连、taskkill 全路径、nssm 下目录选择器走 browse、窄屏换行），各带 `[本地改造]` 注释，属"给官方报 bug/PR"的候选，不阻塞插件化。
 
-代价：框架源码有改动（约两千行内），升级上游需合并。
-收益：**标准图片消息体验保留**（缩略图 / 点击放大 / 附件管理）+ 全链路覆盖。
-
-> 一句话：不改源码 = 只覆盖粘贴入口且失去图片消息体验；本 fork 改源码 = 全链路 + 完整体验。
-> 语音同理：官方不认识"语音消息"，本 fork 的语音落盘 / ASR 转文本 / 语音气泡 / AI 语音回复也是一整套框架改动（voice.ts 等）。
+**除上述外，本插件功能（设置分区/工具条/识图/余额/克隆/`/de`/插件页配置入口）全部走官方扩展点，0 改源码。** 7 个设置分区的配置界面 2026-09-26 起已同时注册进官方「插件」页卡片详情（`plugins.bundle.config`），设置页旧分区为过渡期共存、随后移除。
 
 ### 余额
 - 直连模型时输入框右侧实时显示余额（¥xx）
@@ -73,13 +69,15 @@
 
 ## 安装
 
+> ⚠️ **npm 注册表上的 0.3.24 是旧壳**（host 121KB/284KB、client 141KB/424KB 对不上本机补丁版），
+> `dsh plugin add` 从注册表安装会**丢掉全部本地补丁**。在插件源码归位 git 仓库并重新发版之前，
+> 本机/新装都只能用下面"整合版 fork"路径；本机 profile 内的包走 `link:` 指向
+> `profiles/node_modules/@oadank/dsh-input-tools`，不受注册表影响。
+
 ### 场景一：已有 dsh 运行环境（源码版或 npm 版）
 
-```bash
-dsh plugin --profile web add @oadank/dsh-input-tools
-```
-
-装进当前 profile（`~/.dsh/profiles/<name>/node_modules/`），重启 dsh 生效。
+暂不可用（注册表是旧壳，见上方警告）。正确姿势：把本包目录整copy到
+`~/.dsh/profiles/node_modules/@oadank/` 下，再 `dsh plugin --profile web add` 走 link（本机已如此）。
 
 ### 场景二：从零开始（推荐，一键整合版）
 
@@ -116,29 +114,6 @@ setup 脚本自动完成：装插件进 profile → 注册 → 检查 ffmpeg →
 
 语音设置都在设置页「语音服务」分区（引擎、音色、Key、克隆、ASR 模式），存于 `~/.dsh/voice-config.json`。
 
-## 语音源码补丁（完整体验原生语音消息）
+## 语音消息渲染的归属（2026-09-26 定调）
 
-dsh 官方版（npm rc.7 / 官方源码）**契约不支持原生语音消息**（voice 消息气泡、AI 语音回复条）。二选一：
-
-### 方案 A：官方源码 + 破解脚本
-
-```bash
-git clone https://github.com/deepseek-ai/deepseek-harness.git
-cd deepseek-harness
-git checkout 141eb6fef8        # 官方 dsh-0.1.0-rc.8 基线
-# 打补丁（脚本自动探测/输入源码位置）：
-powershell -ExecutionPolicy Bypass -File <插件目录>\patches\apply-voice-patch.ps1
-pnpm install && pnpm run build:lib && pnpm run build:web && dsh --profile web
-```
-
-### 方案 B：直接用整合版 fork（推荐）
-
-```bash
-git clone https://github.com/oadank/deepseek-harness.git
-cd deepseek-harness
-powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
-pnpm install && pnpm run build:lib && pnpm run build:web && dsh --profile web
-```
-
-> 补丁基线官方 rc.8（141eb6fef8），官方后续更新可能不兼容，请先 checkout 该基线再打。回滚：`git apply -R`。
-> npm 版（rc.7）限制：语音输入/合成可用，但语音气泡/AI 语音回复条无法原生显示（完整体验用源码版）。
+语音气泡 / AI 语音回复条的**渲染代码正从官方仓库迁入本插件**（视频条已证明纯插件可行：`uiConversation.events.register` + 自绘组件，0 改官方源码）。迁移完成前，该渲染暂居 fork 的 `ui-chat` 包；完成后 fork 对官方源码的改动只剩 `core/session` 事件类型等无法插件化的少数项（见「架构说明」表）。

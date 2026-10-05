@@ -22,7 +22,6 @@
     "lib",
     "scripts",
     "assets",
-    "patches",
     "README.md",
     "cordis.patch.yml"
   ],
