@@ -1,6 +1,6 @@
 {
   "name": "@oadank/dsh-input-tools",
-  "version": "0.3.25",
+  "version": "0.3.26",
   "private": false,
   "type": "module",
   "main": "lib/index.js",
@@ -44,5 +44,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "DSH 语音+文件宿主一体化插件：host=语音/TTS/ASR/克隆/自动回复 + 全局人设 + MCP 动态管理 + Skill 管理 + /vscode-files 文件 API；client=工具条/语音设置/复制按钮。0.1.5 已吸收 @anoslide/dsh-host-files。"
+  "description": "DSH 语音+文件宿主一体化插件：host=语音/TTS/ASR/克隆/自动回复 + 全局人设 + MCP 动态管理 + Skill 管理 + /vscode-files 文件 API；client=工具条/语音设置/复制按钮。0.1.5 已吸收 @anoslide/dsh-host-files。0.3.26 本地 TTS 换内置 Hojo-TTS-Light-40M（install-local-tts.ps1 一键装：HF 权重 + 瘦 venv + nssm 常驻 18792），停用 MeloTTS。"
 }

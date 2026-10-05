@@ -67,6 +67,28 @@
 
 ![语音消息展示](assets/screenshots/voice-message-bubbles.png)
 
+## 本地 TTS（内置 Hojo-TTS-Light-40M）
+
+语音设置页 → 本地 TTS → 点「复制安装命令」，拿**管理员 PowerShell** 粘贴执行 `scripts/install-local-tts.ps1`：
+
+1. 从 HuggingFace 拉 **Hojo-TTS-Light-40M** 权重（4 个文件约 240MB；主站不通自动切 `hf-mirror.com`，断点续传 + 体积校验）
+2. 建**专用瘦 venv**：只装 `onnxruntime` / `onnx` / `numpy` / `tokenizers` / `soundfile`，约 **170MB**
+   （venv 与权重都**不进 git、不进安装包**，装机时本地自建）
+3. 注册 nssm 常驻服务 `dsh-local-tts`（`127.0.0.1:18792`，开机自启，模型常驻内存）
+4. **自检**：`GET /health` + 真合成一段 mp3，两关都过才报成功
+
+装完到设置页把「HTTP 服务地址」填 `http://127.0.0.1:18792/tts`，「本地命令」留空。
+
+| 细节 | 说明 |
+|---|---|
+| 落盘位置 | `%USERPROFILE%\.dsh\hojo-tts`（探测顺序：`-InstallDir` → `~\.dsh\hojo-tts` → `C:\D\opt\hojo-tts-light` → `D:\opt\hojo-tts-light`，已有安装复用，不重复占盘） |
+| 服务端代码 | 在本插件内（`scripts/hojo-tts/`，含上游 Apache-2.0 的 `onnx_model.py` 与 LICENSE），安装时拷进安装目录 → **插件升级/重装不影响已装服务** |
+| 常驻要求 | 服务以 LocalSystem 跑：脚本会把 `HOJO_MODELS` / `FFMPEG` 写进服务环境（注册表 `AppEnvironmentExtra`，`nssm set` 写多值不可靠），`server.py` 自身也有一套 ffmpeg 兜底探测 |
+| 幂等 | 权重按最小体积校验、venv 按依赖 import 校验，缺什么补什么；`-Force` 重做，`-SkipService` 只装文件 |
+| 旧版 MeloTTS | 已停用（sherpa-onnx VITS + `local-tts.mjs`）。脚本**只检测不自动删**残留，并打印删除命令——`sherpa-onnx` 本体与 `models\sensevoice-int8` 是 ASR 在用，别一起删 |
+
+> 音色：40M 只有预置音色库（`hojo_zh_f_01/02` 中文女声 + 十几个英文男女），**无中文男声、无克隆接口**。要中文男声走小米音色设计。
+
 ## 安装
 
 > ⚠️ **npm 注册表上的 0.3.24 是旧壳**（host 121KB/284KB、client 141KB/424KB 对不上本机补丁版），
