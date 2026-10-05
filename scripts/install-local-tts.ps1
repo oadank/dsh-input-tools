@@ -188,7 +188,7 @@ Log "  venv 体积: $venvMB MB" Green
 
 # ---------- 4. 服务端代码（从插件包拷进安装目录，自包含） ----------
 Log "`n[4/6] 拷入服务端代码..." Yellow
-foreach ($f in @("server.py", "onnx_model.py", "LICENSE-Hojo-TTS-Light-40M.txt")) {
+foreach ($f in @("server.py", "onnx_model.py", "set-voice-config.py", "LICENSE-Hojo-TTS-Light-40M.txt")) {
   $src = Join-Path $SrcDir $f
   if (-not (Test-Path $src)) { Log "  ❌ 插件包内缺少 scripts\hojo-tts\$f —— 插件版本太旧，请更新插件" Red; exit 1 }
   Copy-Item $src (Join-Path $InstallDir $f) -Force
@@ -301,6 +301,25 @@ Stop-Transcript
   } catch { Log "  ❌ 服务在跑但合成失败：$($_.Exception.Message)" Red; exit 1 }
 }
 
+# ---------- 6b. 写插件配置：把「本地 TTS」地址指到本服务 ----------
+# 插件的 loadVoiceConfig() 按文件 mtime 实时重读（index.js:261）⇒ 外部改这份 JSON **立即生效、无需重启**。
+# 只动 engines.local；cmd 仅在它指向已废弃的 local-tts.mjs 时才清空，用户自己写的别的本地命令不动。
+$vc = Join-Path $env:USERPROFILE ".dsh\voice-config.json"
+if (Test-Path $vc) {
+  try {
+    Copy-Item $vc "$vc.bak-$(Get-Date -Format yyyyMMdd-HHmmss)" -Force
+    $cfgOut = & $VenvPy (Join-Path $InstallDir "set-voice-config.py") $vc "http://127.0.0.1:$Port/tts" 2>&1
+    Log "  已写 voice-config.json: $cfgOut" Green
+    $j = Get-Content $vc -Raw | ConvertFrom-Json
+    Log ("  回读 local.url={0}   local.cmd='{1}'" -f $j.engines.local.url, $j.engines.local.cmd) Green
+  } catch {
+    Log "  ⚠️ voice-config 自动写入失败（不影响服务本身）：$($_.Exception.Message)" Yellow
+    Log "     请手动到 设置 → 语音服务 → 本地 TTS → 地址填 http://127.0.0.1:$Port/tts" Yellow
+  }
+} else {
+  Log "  未找到 voice-config.json（插件还没跑过设置页）→ 装完手动把地址填成 http://127.0.0.1:$Port/tts" Yellow
+}
+
 # ---------- 收尾 ----------
 $oldMelo = @("$env:USERPROFILE\.dsh\sherpa-onnx\models\melo", "C:\D\opt\sherpa-onnx\models\melo", "D:\opt\deepseek-harness\asr\models\melo")
 $found = @()
@@ -310,9 +329,8 @@ Log "`n==== 安装完成 ====" Cyan
 Log "权重+venv： $InstallDir"
 Log "服务日志  ： $LogsDir\service-out.log"
 Log ""
-Log "🔴 最后一步（插件设置里填一次）：" White
-Log "  dsh 设置 → 语音服务 → 本地 TTS → 地址填： http://127.0.0.1:$Port/tts" Green
-Log "  「本地命令」留空（本版走常驻服务，不再用 node local-tts.mjs 那条路）" DarkGray
+Log "本机插件配置已自动指向： http://127.0.0.1:$Port/tts" Green
+Log "  （设置 → 语音服务 → 本地 TTS 可核对；「本地命令」保持留空）" DarkGray
 if ($found.Count -gt 0) {
   Log ""
   Log "⚠️ 检测到旧 MeloTTS 残留（不再被本插件使用，确认没别的程序在用后可删）：" Yellow
